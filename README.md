@@ -6,7 +6,7 @@ This repo contains everything you need to complete your one-week intern task whe
 
 ```
 .
-├── discord-bot/               # 🤖 Job Hunter Bot — live Upwork scraper powering all campaigns
+├── [discord-bot/](https://drive.google.com/file/d/15UCTICYtyd6C49w6NEyk6RWDSBvyCfLP/view?usp=sharing)               # 🤖 Job Hunter Bot — live Upwork scraper powering all campaigns
 ├── electron-app/              # ⚡ Main App (START HERE) — the full desktop platform you'll be working in
 ├── Intern_Task_Allocation.pdf # 📋 Your Mission Brief — read this before touching any code
 └── README.md
