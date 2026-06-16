@@ -969,6 +969,15 @@ class Storage {
     await this.ensureConnected();
     try {
       const now = new Date().toISOString();
+      if (data.campaignId && data.title) {
+        const existing = await this.pool.query(
+          'SELECT * FROM product WHERE campaign_id = $1 AND title = $2 LIMIT 1',
+          [data.campaignId, data.title]
+        );
+        if (existing.rows.length > 0) {
+          return this._maybeParse(existing.rows[0]);
+        }
+      }
       const product = {
         id: nanoid(),
         campaign_id: data.campaignId,
@@ -1060,6 +1069,15 @@ class Storage {
     await this.ensureConnected();
     try {
       const now = new Date().toISOString();
+      if (data.campaignId && data.title) {
+        const existing = await this.pool.query(
+          'SELECT * FROM blog WHERE campaign_id = $1 AND title = $2 LIMIT 1',
+          [data.campaignId, data.title]
+        );
+        if (existing.rows.length > 0) {
+          return this._maybeParse(existing.rows[0]);
+        }
+      }
       const post = {
         id: nanoid(),
         campaign_id: data.campaignId,

@@ -78,9 +78,12 @@ export default function PostPage() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold text-gray-900 mb-6">Post a Listing</h1>
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold text-gray-900">Post a Listing</h1>
+        <p className="text-gray-500 mt-1">Create a new job, product, service, or blog listing.</p>
+      </div>
 
-      <div className="flex gap-2 mb-6">
+      <div className="flex gap-2 mb-6 border-b border-gray-200 pb-4">
         {tabs.map((tab) => (
           <button
             key={tab.key}
@@ -89,10 +92,10 @@ export default function PostPage() {
               setForm({});
               setMessage("");
             }}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
               activeTab === tab.key
-                ? "bg-blue-600 text-white"
-                : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                ? "bg-blue-600 text-white shadow-sm"
+                : "bg-white text-gray-600 hover:bg-gray-50 border border-gray-200"
             }`}
           >
             {tab.label}
@@ -101,13 +104,17 @@ export default function PostPage() {
       </div>
 
       {message && (
-        <div className="mb-4 p-3 rounded-lg bg-gray-50 text-sm">{message}</div>
+        <div className={`mb-4 p-4 rounded-xl text-sm font-medium ${
+          message.startsWith("✅") ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"
+        }`}>
+          {message}
+        </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         {fields[activeTab].map((field) => (
           <div key={field.label}>
-            <label className="block text-sm font-medium text-gray-700 mb-1 capitalize">
+            <label className="block text-sm font-medium text-gray-700 mb-1.5 capitalize">
               {field.label.replace(/([A-Z])/g, " $1")}
             </label>
             {field.rows ? (
@@ -115,7 +122,7 @@ export default function PostPage() {
                 value={form[field.label] || ""}
                 onChange={(e) => handleChange(field.label, e.target.value)}
                 rows={field.rows}
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition"
+                className="w-full px-4 py-2.5 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition text-sm"
                 required
               />
             ) : (
@@ -123,7 +130,7 @@ export default function PostPage() {
                 type={field.type || "text"}
                 value={form[field.label] || ""}
                 onChange={(e) => handleChange(field.label, e.target.value)}
-                className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition"
+                className="w-full px-4 py-2.5 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition text-sm"
                 required
               />
             )}
@@ -133,9 +140,17 @@ export default function PostPage() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50 transition"
+          className="w-full py-3 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-medium hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 transition shadow-sm"
         >
-          {loading ? "Creating..." : `Create ${currentTab.label}`}
+          {loading ? (
+            <span className="inline-flex items-center gap-2">
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Creating...
+            </span>
+          ) : `Create ${currentTab.label}`}
         </button>
       </form>
     </div>
