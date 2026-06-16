@@ -1,0 +1,22 @@
+<%- include('partials/header', { title: 'Products - BAKHT' }) %>
+
+<section class="section">
+  <div class="container">
+    <h1 class="page-title">All Products</h1>
+    <% if (products.length > 0) { %>
+    <div class="card-grid">
+      <% products.forEach(product => { %>
+      <a href="/products/<%= product.id %>" class="card">
+        <h3><%= product.title %></h3>
+        <p><%= product.description %></p>
+        <span class="card-date"><%= new Date(product.createdAt).toLocaleDateString() %></span>
+      </a>
+      <% }) %>
+    </div>
+    <% } else { %>
+    <p class="empty-state">No products yet. Products will appear here once they are generated from viable jobs.</p>
+    <% } %>
+  </div>
+</section>
+
+<%- include('partials/footer') %>

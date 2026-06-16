@@ -1,16 +1,48 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import net from 'net';
 import { fileURLToPath } from 'url';
-import { campaignManager } from '../services/campaignManager.js';
-import { indexerCampaignManager } from '../services/indexerCampaignManager.js';
 import { upworkCampaignManager } from '../services/upworkCampaignManager.js';
 import { initializeDefaultGPTAccount } from '../services/initializeGPTAccounts.js';
 import './ipcHandlers.js'; // This registers all IPC handlers
-import { testChatGPTScraper, testCookieLoading, quickTest, mockTest } from '../services/testScript.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL ?? 'http://localhost:5173';
+const DEV_SERVER_POLL_INTERVAL = 200;  // ms between retries
+const DEV_SERVER_TIMEOUT = 10000;      // 10s max wait
+
+/**
+ * Polls the Vite dev server TCP port until it accepts connections.
+ * This prevents Electron from loading the URL before Vite is ready.
+ */
+function waitForDevServer(url, timeout) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const urlObj = new URL(url);
+    const port = Number(urlObj.port) || 5173;
+    const host = urlObj.hostname;
+
+    const tryConnect = () => {
+      const client = net.createConnection({ port, host }, () => {
+        client.destroy();
+        resolve();
+      });
+      client.on('error', () => {
+        client.destroy();
+        if (Date.now() - start >= timeout) {
+          reject(new Error(`Vite dev server not ready after ${timeout}ms`));
+        } else {
+          setTimeout(tryConnect, DEV_SERVER_POLL_INTERVAL);
+        }
+      });
+    };
+
+    tryConnect();
+  });
+}
 
 let mainWindow;
 
@@ -204,13 +236,14 @@ function resolvePreloadPath() {
   return path.resolve(__dirname, '../../preload.js');
 }
 
-function createWindow() {
+async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 1200,
     minHeight: 700,
-    backgroundColor: '#000000',
+    backgroundColor: '#0f0f0f',
+    show: false,                             // hidden until content is ready
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -218,36 +251,58 @@ function createWindow() {
     },
     titleBarStyle: 'hiddenInset',
     frame: false,
-    show: false
   });
 
-  // Load the app
+  // Add diagnostic listeners for load failures
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDesc, failedUrl) => {
+    console.error(`❌ Failed to load ${failedUrl}: [${errorCode}] ${errorDesc}`);
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log('✅ Renderer loaded successfully');
+    // Fallback: ensure window is shown even if ready-to-show doesn't fire
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      console.log('📺 Showing window (did-finish-load fallback)');
+      mainWindow.show();
+    }
+  });
+
+  // Load the app — wait for Vite in dev mode
   const devUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devUrl) {
-    mainWindow.loadURL(devUrl);
-    setupDevTools();
-  } else if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:5173');
+  const isDev = devUrl || process.env.NODE_ENV === 'development';
+
+  if (isDev) {
+    const url = devUrl || 'http://localhost:5173';
+    try {
+      console.log(`⏳ Waiting for Vite dev server at ${url}...`);
+      await waitForDevServer(url, DEV_SERVER_TIMEOUT);
+      console.log('✅ Vite dev server is ready');
+      await mainWindow.loadURL(url);
+    } catch (err) {
+      console.error('❌ Vite dev server failed to start:', err);
+      app.quit();
+      return;
+    }
     setupDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+    await mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
-  
+
   // Setup DevTools with error suppression
   function setupDevTools() {
     // Open DevTools
     // mainWindow.webContents.openDevTools();
-    
+
     // Suppress autofill errors in console
     mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
       // Filter out Autofill errors
-      if (message.includes('Autofill.enable') || 
+      if (message.includes('Autofill.enable') ||
           message.includes('Autofill.setAddresses') ||
           message.includes("wasn't found")) {
         event.preventDefault();
         return;
       }
-      
+
       // Log other console messages normally (optional)
       if (level === 2) { // Error level
         console.error(`Console Error: ${message}`);
@@ -255,8 +310,9 @@ function createWindow() {
     });
   }
 
-  // Show window when ready
+  // Show window when ready — eliminates black flash
   mainWindow.once('ready-to-show', () => {
+    console.log('📺 Showing window (ready-to-show)');
     mainWindow.show();
   });
 
@@ -268,12 +324,15 @@ function createWindow() {
 app.whenReady().then(async () => {
   // Initialize default GPT account
   await initializeDefaultGPTAccount();
-  
+
+  // Reset any stale 'Running' campaigns from previous sessions
+  await upworkCampaignManager.resetRunningCampaigns();
+
   // Run tests if requested
   // await runTests();
-  
-  // Create window
-  createWindow();
+
+  // Create window (now async — waits for Vite)
+  await createWindow();
 });
 
 app.on('window-all-closed', () => {
@@ -286,53 +345,6 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
   }
-});
-
-// Events forwarding to renderer
-campaignManager.on('log', (evt) => {
-  const windows = BrowserWindow.getAllWindows();
-  windows.forEach(win => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('log:message', evt);
-    }
-  });
-});
-
-campaignManager.on('status', (evt) => {
-  const windows = BrowserWindow.getAllWindows();
-  windows.forEach(win => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('campaign:status', evt);
-    }
-  });
-});
-
-campaignManager.on('progress', (evt) => {
-  const windows = BrowserWindow.getAllWindows();
-  windows.forEach(win => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('campaign:progress', evt);
-    }
-  });
-});
-
-// Indexer campaign events forwarding to renderer
-indexerCampaignManager.on('log', (evt) => {
-  const windows = BrowserWindow.getAllWindows();
-  windows.forEach(win => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('log:message', evt);
-    }
-  });
-});
-
-indexerCampaignManager.on('status', (evt) => {
-  const windows = BrowserWindow.getAllWindows();
-  windows.forEach(win => {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('indexer-campaign:status', evt);
-    }
-  });
 });
 
 // Upwork campaign events forwarding to renderer

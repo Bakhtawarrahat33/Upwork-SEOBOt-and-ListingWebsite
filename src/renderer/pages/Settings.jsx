@@ -67,45 +67,55 @@ export default function Settings() {
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold">ChatGPT Accounts</h2>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-green-500 to-emerald-500 px-4 py-2 text-sm font-medium text-white hover:from-green-600 hover:to-emerald-600 transition-all"
-          >
-            <Plus className="h-4 w-4" />
-            Add Account
-          </button>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-neutral-400">{gptAccounts.length} account{gptAccounts.length !== 1 ? 's' : ''}</span>
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-green-500 to-emerald-500 px-4 py-2 text-sm font-medium text-white hover:from-green-600 hover:to-emerald-600 transition-all"
+            >
+              <Plus className="h-4 w-4" />
+              Add Account
+            </button>
+          </div>
         </div>
 
         {/* Accounts List */}
-        <div className="space-y-3">
-          {gptAccounts.length === 0 ? (
-            <div className="text-center py-8 text-neutral-400">
-              No ChatGPT accounts saved yet
-            </div>
-          ) : (
-            gptAccounts.map((account) => (
+        {gptAccounts.length === 0 ? (
+          <div className="text-center py-12 text-neutral-400">
+            <div className="text-4xl mb-3">🔑</div>
+            <p>No ChatGPT accounts saved yet</p>
+            <p className="text-sm text-neutral-500 mt-1">Add your first account to get started</p>
+          </div>
+        ) : (
+          <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent hover:scrollbar-thumb-white/20">
+            {gptAccounts.map((account) => (
               <motion.div
                 key={account.id}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="flex items-center justify-between p-4 rounded-lg bg-white/5 border border-white/10 hover:border-green-500/50 transition-colors"
               >
-                <div>
-                  <div className="font-medium">{account.name}</div>
-                  <div className="text-sm text-neutral-400">
-                    {account.cookies?.length || 0} cookies • Created {new Date(account.createdAt).toLocaleDateString()}
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center text-white font-bold text-sm shrink-0">
+                    {account.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="font-medium">{account.name}</div>
+                    <div className="text-sm text-neutral-400">
+                      {account.cookies?.length || 0} cookies &bull; Added {new Date(account.createdAt).toLocaleDateString()}
+                    </div>
                   </div>
                 </div>
                 <button
                   onClick={() => handleDelete(account.id)}
-                  className="p-2 rounded-lg hover:bg-red-500/20 text-red-400 hover:text-red-300 transition-colors"
+                  className="p-2 rounded-lg hover:bg-red-500/20 text-red-400 hover:text-red-300 transition-colors shrink-0"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
               </motion.div>
-            ))
-          )}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Add Account Modal */}

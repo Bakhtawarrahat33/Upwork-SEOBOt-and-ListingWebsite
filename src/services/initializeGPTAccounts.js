@@ -16,13 +16,13 @@ export async function initializeDefaultGPTAccount() {
     // Check if any accounts exist
     const existingAccounts = await storage.getGPTAccounts();
     
-    // If "zeeshan ahmed" already exists, skip
-    const zeeshanExists = existingAccounts.some(
-      acc => acc.name.toLowerCase() === 'zeeshan ahmed'
+    // If "Bakhtawar Account" already exists, skip
+    const accountExists = existingAccounts.some(
+      acc => acc.name.toLowerCase() === 'Bakhtawar Account'
     );
     
-    if (zeeshanExists) {
-      console.log('✅ Default GPT account "zeeshan ahmed" already exists');
+    if (accountExists) {
+      console.log('✅ Default GPT account "Bakhtawar Account" already exists');
       return;
     }
     
@@ -37,13 +37,14 @@ export async function initializeDefaultGPTAccount() {
     const cookiesContent = fs.readFileSync(cookiesPath, 'utf8');
     const cookies = JSON.parse(cookiesContent);
     
-    // Create default account
+    // Create default account (first account becomes default automatically)
     await storage.createGPTAccount({
-      name: 'zeeshan ahmed',
-      cookies: cookies
+      name: 'Bakhtawar Account',
+      cookies: cookies,
+      status: 'active'
     });
     
-    console.log('✅ Default GPT account "zeeshan ahmed" created successfully');
+    console.log('✅ Default GPT account "Bakhtawar Account" created successfully');
   } catch (error) {
     console.error('❌ Error initializing default GPT account:', error);
     // Don't throw - this is optional initialization

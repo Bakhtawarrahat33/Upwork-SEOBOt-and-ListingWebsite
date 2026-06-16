@@ -145,7 +145,27 @@ export function extractAndRepairJSON(text, logPrefix = '') {
       }
     }
   }
-  
+
+  // Strategy 6: Try to parse truncated JSON (missing closing braces/truncated response)
+  try {
+    log('🔧 Attempting to parse truncated JSON...');
+    const truncatedMatch = text.match(/\{[\s\S]*/);
+    if (truncatedMatch) {
+      let partial = truncatedMatch[0];
+      const openBraces = (partial.match(/\{/g) || []).length;
+      const closeBraces = (partial.match(/\}/g) || []).length;
+      if (closeBraces < openBraces) {
+        partial += '}'.repeat(openBraces - closeBraces);
+      }
+      const repaired = jsonrepair(partial);
+      const parsed = JSON.parse(repaired);
+      log('✅ Truncated JSON parsed successfully via repair');
+      return parsed;
+    }
+  } catch (truncatedError) {
+    log(`❌ Truncated JSON parsing failed: ${truncatedError.message}`);
+  }
+
   // All strategies failed
   throw new Error('Failed to extract or repair JSON from response. All strategies exhausted.');
 }
@@ -162,7 +182,8 @@ export function normalizeJobFilterResponse(parsed) {
     open_source_viable: 'No',
     niche: 'None',
     platform: 'None',
-    tool: 'None'
+    tool: 'None',
+    reason: parsed.reason || null
   };
   
   // Handle various field name variations for open_source_viable

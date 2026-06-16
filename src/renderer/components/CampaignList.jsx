@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, Square, Eye, Trash2, Clock, CheckCircle, XCircle, Loader, Hash, Link, Search, X, FileText, Download } from 'lucide-react';
-import CampaignResultsModal from './CampaignResultsModal';
-import RepoStatusModal from './RepoStatusModal';
+import { Play, Square, Trash2, Clock, CheckCircle, XCircle, Loader, Hash, Link, Search, X, Download, Rocket } from 'lucide-react';
 
 const statusConfig = {
   Idle: { icon: Clock, color: 'text-neutral-400', bg: 'bg-neutral-800' },
@@ -14,8 +12,6 @@ const statusConfig = {
 
 export default function CampaignList({ campaigns, onStart, onStop, onDelete }) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCampaign, setSelectedCampaign] = useState(null);
-  const [repoStatusCampaign, setRepoStatusCampaign] = useState(null);
 
   const handleExportLogs = async (campaignId, campaignName) => {
     if (window.api && window.api.getCampaignLogs) {
@@ -35,10 +31,31 @@ export default function CampaignList({ campaigns, onStart, onStop, onDelete }) {
     }
   };
 
+  // Helper function to get item label for a campaign
+  const getItemLabel = (campaign) => {
+    if (campaign.category === 'upwork' && campaign.upworkSearchInput) {
+      return `Search: "${campaign.upworkSearchInput}"`;
+    } else if (campaign.category === 'apify' && campaign.apifyUrls) {
+      const count = campaign.apifyUrls.split('\n').filter(line => line.trim()).length;
+      return `${count} URL${count !== 1 ? 's' : ''}`;
+    } else if (campaign.keywords) {
+      let count;
+      if (typeof campaign.keywords === 'string') {
+        count = campaign.keywords.split('\n').filter(line => line.trim()).length;
+      } else if (Array.isArray(campaign.keywords)) {
+        count = campaign.keywords.length;
+      }
+      return `${count || 0} keyword${count !== 1 ? 's' : ''}`;
+    }
+    return '';
+  };
+
   // Helper function to count items in a campaign
   const getItemCount = (campaign) => {
     if (campaign.category === 'apify' && campaign.apifyUrls) {
       return campaign.apifyUrls.split('\n').filter(line => line.trim()).length;
+    } else if (campaign.category === 'upwork') {
+      return 1;
     } else if (campaign.keywords) {
       if (typeof campaign.keywords === 'string') {
         return campaign.keywords.split('\n').filter(line => line.trim()).length;
@@ -82,12 +99,6 @@ export default function CampaignList({ campaigns, onStart, onStop, onDelete }) {
     
     return name.includes(query);
   });
-
-  const handleRepoDeleted = (repoUrl) => {
-    // Refresh the campaign list or update the selected campaign
-    // You might want to emit an event or trigger a refresh here
-    console.log('Repo deleted:', repoUrl);
-  };
 
   if (!campaigns || campaigns.length === 0) {
     return (
@@ -157,10 +168,10 @@ export default function CampaignList({ campaigns, onStart, onStop, onDelete }) {
                 const questionCount = getQuestionCount(campaign);
                 const progress = campaign.progress || { processed: 0, total: itemCount };
                 const progressPercent = progress.total > 0 ? (progress.processed / progress.total) * 100 : 0;
-                const successCount = campaign.results?.filter(r => r.status === 'success').length || 0;
-                const failCount = campaign.results?.filter(r => r.status === 'failed').length || 0;
-                const readmeOnlyCount = campaign.results?.filter(r => r.status === 'success' && !r.codeGenerated).length || 0;
-                const hasResults = campaign.results && campaign.results.length > 0;
+                const results = Array.isArray(campaign.results) ? campaign.results : [];
+                const successCount = results.filter(r => r.status === 'success').length;
+                const failCount = results.filter(r => r.status === 'failed').length;
+                const hasResults = results.length > 0;
                 const isCompleted = campaign.status === 'Completed' || campaign.status === 'Failed';
 
                 return (
@@ -174,42 +185,26 @@ export default function CampaignList({ campaigns, onStart, onStop, onDelete }) {
                     className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 hover:border-neutral-700 transition-all"
                   >
                     <div className="flex items-center gap-4">
-                      {/* Name & Info - Make clickable if has results OR is running */}
-                      <div 
-                        className={`flex-1 min-w-0 ${(hasResults && isCompleted) || isRunning ? 'cursor-pointer' : ''}`}
-                        onClick={() => {
-                          if (isRunning) {
-                            setRepoStatusCampaign(campaign);
-                          } else if (hasResults && isCompleted) {
-                            setSelectedCampaign(campaign);
-                          }
-                        }}
-                      >
+                      <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                          <h3 className={`text-base font-semibold text-white truncate ${(hasResults && isCompleted) || isRunning ? 'hover:text-purple-400 transition-colors' : ''}`}>
+                          <h3 className="text-base font-semibold text-white truncate">
                             {campaign.name}
                           </h3>
                           {campaign.category && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-neutral-800 text-xs text-neutral-400">
                               {campaign.category === 'apify' ? (
-                                <>
-                                  <Link className="w-3 h-3" />
-                                  Apify
-                                </>
+                                <><Link className="w-3 h-3" />Apify</>
+                              ) : campaign.category === 'upwork' ? (
+                                <><Rocket className="w-3 h-3" />Upwork</>
                               ) : (
-                                <>
-                                  <Hash className="w-3 h-3" />
-                                  Keywords
-                                </>
+                                <><Hash className="w-3 h-3" />Keywords</>
                               )}
                             </span>
                           )}
                         </div>
                         <p className="text-xs text-neutral-500">
-                          {itemCount} {campaign.category === 'apify' ? 'URL' : 'keyword'}{itemCount !== 1 ? 's' : ''}
+                          {getItemLabel(campaign)}
                           {questionCount > 0 && ` • ${questionCount} question${questionCount !== 1 ? 's' : ''}`}
-                          {isRunning && ' • Click to view status'}
-                          {hasResults && isCompleted && ' • Click to view results'}
                         </p>
                       </div>
 
@@ -223,10 +218,10 @@ export default function CampaignList({ campaigns, onStart, onStop, onDelete }) {
                       {isRunning ? (
                         <div className="flex items-center gap-2 text-sm text-neutral-400 min-w-[100px]">
                           <div className="flex-1 h-2 bg-neutral-800 rounded-full overflow-hidden">
-                            <motion.div 
-                              initial={{ width: 0 }} 
-                              animate={{ width: `${progressPercent}%` }} 
-                              className="h-full bg-gradient-to-r from-purple-500 to-pink-500" 
+                            <motion.div
+                              initial={{ width: 0 }}
+                              animate={{ width: `${progressPercent}%` }}
+                              className="h-full bg-gradient-to-r from-purple-500 to-pink-500"
                             />
                           </div>
                           <span className="text-xs whitespace-nowrap">{progress.processed}/{progress.total}</span>
@@ -237,12 +232,6 @@ export default function CampaignList({ campaigns, onStart, onStop, onDelete }) {
                             <span className="text-green-400 font-medium flex items-center gap-1">
                               <CheckCircle className="w-3.5 h-3.5" />
                               {successCount}
-                            </span>
-                          )}
-                          {readmeOnlyCount > 0 && (
-                            <span className="text-yellow-400 font-medium flex items-center gap-1" title={`${readmeOnlyCount} repo(s) with README only`}>
-                              <FileText className="w-3.5 h-3.5" />
-                              {readmeOnlyCount}
                             </span>
                           )}
                           {failCount > 0 && (
@@ -303,26 +292,6 @@ export default function CampaignList({ campaigns, onStart, onStop, onDelete }) {
         )}
       </div>
 
-      {/* Results Modal */}
-      <AnimatePresence>
-        {selectedCampaign && (
-          <CampaignResultsModal
-            campaign={selectedCampaign}
-            onClose={() => setSelectedCampaign(null)}
-            onRepoDeleted={handleRepoDeleted}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Repo Status Modal */}
-      <AnimatePresence>
-        {repoStatusCampaign && (
-          <RepoStatusModal
-            campaign={repoStatusCampaign}
-            onClose={() => setRepoStatusCampaign(null)}
-          />
-        )}
-      </AnimatePresence>
     </>
   );
 }

@@ -1,15 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Github, TrendingUp, Activity, Zap, Users, GitBranch, Star, Clock } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { TrendingUp, Activity, Zap, Clock } from 'lucide-react';
 
 export default function Dashboard() {
   const [stats, setStats] = useState({
     totalCampaigns: 0,
     runningCampaigns: 0,
     completedCampaigns: 0,
-    totalRepos: 0,
-    successRate: 0
   });
 
   const [recentActivity, setRecentActivity] = useState([]);
@@ -23,27 +20,12 @@ export default function Dashboard() {
         const running = campaigns.filter(c => c.status === 'Running').length;
         const completed = campaigns.filter(c => c.status === 'Completed').length;
         
-        let totalRepos = 0;
-        let successfulRepos = 0;
-        
-        campaigns.forEach(campaign => {
-          if (campaign.results) {
-            totalRepos += campaign.results.length;
-            successfulRepos += campaign.results.filter(r => r.status === 'success').length;
-          }
-        });
-        
-        const successRate = totalRepos > 0 ? Math.round((successfulRepos / totalRepos) * 100) : 0;
-        
         setStats({
           totalCampaigns: total,
           runningCampaigns: running,
           completedCampaigns: completed,
-          totalRepos: successfulRepos,
-          successRate
         });
 
-        // Get recent activity (last 5 campaigns)
         const recent = campaigns
           .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
           .slice(0, 5);
@@ -60,7 +42,7 @@ export default function Dashboard() {
     {
       title: 'Total Campaigns',
       value: stats.totalCampaigns,
-      icon: Github,
+      icon: Activity,
       color: 'purple',
       gradient: 'from-purple-500 to-pink-500'
     },
@@ -73,40 +55,12 @@ export default function Dashboard() {
       animate: stats.runningCampaigns > 0
     },
     {
-      title: 'Repositories Created',
-      value: stats.totalRepos,
-      icon: GitBranch,
-      color: 'green',
-      gradient: 'from-green-500 to-emerald-500'
-    },
-    {
-      title: 'Success Rate',
-      value: `${stats.successRate}%`,
+      title: 'Completed',
+      value: stats.completedCampaigns,
       icon: TrendingUp,
       color: 'yellow',
       gradient: 'from-yellow-500 to-orange-500'
-    }
-  ];
-
-  const features = [
-    {
-      icon: Github,
-      title: 'AI-Powered Generation',
-      description: 'Leverage ChatGPT to generate repository metadata automatically',
-      color: 'purple'
     },
-    {
-      icon: Zap,
-      title: 'Bulk Automation',
-      description: 'Process multiple keywords and create repositories in batches',
-      color: 'blue'
-    },
-    {
-      icon: Activity,
-      title: 'Real-time Monitoring',
-      description: 'Track campaign progress and view detailed execution logs',
-      color: 'green'
-    }
   ];
 
   return (
@@ -126,14 +80,14 @@ export default function Dashboard() {
             </div>
             <div>
               <h1 className="text-3xl font-bold text-white">Dashboard</h1>
-              <p className="text-neutral-400">Overview of your automation activity</p>
+              <p className="text-neutral-400">Overview of your content generation pipeline</p>
             </div>
           </div>
         </div>
       </motion.div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {statCards.map((card, index) => (
           <motion.div
             key={card.title}
@@ -142,7 +96,6 @@ export default function Dashboard() {
             transition={{ delay: index * 0.1 }}
             className="group relative bg-neutral-900 border border-neutral-800 rounded-2xl p-6 hover:border-neutral-700 transition-all overflow-hidden"
           >
-            {/* Gradient Background */}
             <div className={`absolute inset-0 bg-gradient-to-br ${card.gradient} opacity-0 group-hover:opacity-5 transition-opacity`} />
             
             <div className="relative z-10">
@@ -158,32 +111,6 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Features Section */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
-      >
-        <h2 className="text-xl font-semibold text-white mb-4">Features</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {features.map((feature, index) => (
-            <motion.div
-              key={feature.title}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.5 + index * 0.1 }}
-              className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 hover:border-neutral-700 transition-all"
-            >
-              <div className={`w-12 h-12 rounded-xl bg-${feature.color}-500/10 flex items-center justify-center mb-4`}>
-                <feature.icon className={`w-6 h-6 text-${feature.color}-400`} />
-              </div>
-              <h3 className="text-lg font-semibold text-white mb-2">{feature.title}</h3>
-              <p className="text-sm text-neutral-400">{feature.description}</p>
-            </motion.div>
-          ))}
-        </div>
-      </motion.div>
-
       {/* Recent Activity */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -192,12 +119,6 @@ export default function Dashboard() {
       >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold text-white">Recent Campaigns</h2>
-          <Link
-            to="/github-repo-generator"
-            className="text-sm text-purple-400 hover:text-purple-300 transition-colors"
-          >
-            View all →
-          </Link>
         </div>
         
         {recentActivity.length > 0 ? (
@@ -214,13 +135,11 @@ export default function Dashboard() {
               >
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 rounded-lg bg-neutral-800 flex items-center justify-center">
-                    <Github className="w-5 h-5 text-neutral-400" />
+                    <Activity className="w-5 h-5 text-neutral-400" />
                   </div>
                   <div>
                     <h3 className="text-sm font-medium text-white">{campaign.name}</h3>
-                    <p className="text-xs text-neutral-500">
-                      {campaign.keywords?.length || 0} keywords
-                    </p>
+                    <p className="text-xs text-neutral-500">Upwork Campaign</p>
                   </div>
                 </div>
                 
@@ -239,29 +158,10 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-12 text-center">
-            <Github className="w-12 h-12 text-neutral-700 mx-auto mb-3" />
+            <Activity className="w-12 h-12 text-neutral-700 mx-auto mb-3" />
             <p className="text-neutral-500">No campaigns yet. Create your first one to get started!</p>
           </div>
         )}
-      </motion.div>
-
-      {/* Quick Action */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 1 }}
-        className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 rounded-2xl p-8 text-center"
-      >
-        <Star className="w-12 h-12 text-purple-400 mx-auto mb-4" />
-        <h3 className="text-xl font-semibold text-white mb-2">Ready to automate?</h3>
-        <p className="text-neutral-400 mb-6">Create your first campaign and start generating repositories</p>
-        <Link
-          to="/github-repo-generator"
-          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold transition-all shadow-lg shadow-purple-500/30"
-        >
-          <Github className="w-5 h-5" />
-          Go to GitHub Automation
-        </Link>
       </motion.div>
     </div>
   );

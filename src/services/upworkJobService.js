@@ -14,11 +14,55 @@ const __dirname = path.dirname(__filename);
 class UpworkJobService {
   constructor() {
     this.pythonProcess = null;
-    this.botPath = path.join(__dirname, '..', '..', 'upwork-discord-bot');
+    this.pythonPath = 'python';
+    // Try to find Python executable in common locations
+    const commonPythonPaths = [
+      'C:\\Users\\Bakhtawar\\AppData\\Local\\Programs\\Python\\Python310\\python.exe',
+      'C:\\Users\\Bakhtawar\\AppData\\Local\\Programs\\Python\\Python311\\python.exe',
+      'C:\\Users\\Bakhtawar\\AppData\\Local\\Programs\\Python\\Python312\\python.exe',
+      'C:\\Python310\\python.exe',
+      'C:\\Python311\\python.exe',
+      'C:\\Python312\\python.exe',
+    ];
+    for (const p of commonPythonPaths) {
+      if (fs.existsSync(p)) {
+        this.pythonPath = p;
+        break;
+      }
+    }
+    this.botPath = path.join(__dirname, '..', '..', 'upwork-discord-bot 3', 'upwork-discord-bot');
     this.lastAuthRefreshAt = 0; // epoch ms
     this.AUTH_REFRESH_COOLDOWN_MS = 1000 * 60 * 5; // 5 minutes
     this.authRefreshInProgress = false;
     this._authRefreshWaiters = [];
+  }
+
+  /**
+   * Retry an async function with exponential backoff
+   * @param {Function} fn - Async function to retry
+   * @param {Object} options - Retry options
+   * @returns {Promise<any>}
+   */
+  async retryWithBackoff(fn, options = {}) {
+    const maxRetries = options.maxRetries || 3;
+    const baseDelay = options.baseDelay || 2000;
+    const maxDelay = options.maxDelay || 30000;
+    const onRetry = options.onRetry || (() => {});
+
+    let lastError;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+        if (attempt === maxRetries) break;
+
+        const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
+        onRetry(attempt + 1, delay, error);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    throw lastError;
   }
 
   /**
@@ -29,7 +73,7 @@ class UpworkJobService {
    */
   async fetchJobs(query, limit = 10) {
     console.log(`🔍 Fetching Upwork jobs for query: "${query}"`);
-    
+
     // Detect URL mode and extract parameters
     let urlParams = null;
     let isUrl = false;
@@ -55,6 +99,19 @@ class UpworkJobService {
       console.warn('⚠️ Failed to parse potential URL query, treating as keyword. Error:', e?.message);
     }
 
+    return this.retryWithBackoff(
+      () => this._fetchJobsInternal(query, limit, isUrl, urlParams),
+      {
+        maxRetries: 2,
+        baseDelay: 3000,
+        onRetry: (attempt, delay, err) => {
+          console.log(`🔄 fetchJobs retry ${attempt}/2 after ${delay}ms — ${err.message}`);
+        }
+      }
+    );
+  }
+
+  async _fetchJobsInternal(query, limit, isUrl, urlParams) {
     return new Promise((resolve, reject) => {
       try {
         // When URL is provided, use its q parameter (advanced expression supported)
@@ -71,10 +128,10 @@ class UpworkJobService {
           '--filter-only' // Only filter, don't post to Discord
         ];
         
-        console.log('📦 Running Python scraper:', 'python3', args.join(' '));
+        console.log('📦 Running Python scraper:', this.pythonPath, args.join(' '));
         
         // Spawn Python process
-        const pythonProcess = spawn('python3', args, {
+        const pythonProcess = spawn(this.pythonPath, args, {
           cwd: this.botPath,
           env: { ...process.env }
         });
@@ -164,9 +221,9 @@ class UpworkJobService {
           '--job-id', jobId
         ];
         
-        console.log('📦 Running Python scraper for job details:', 'python3', args.join(' '));
+        console.log('📦 Running Python scraper for job details:', this.pythonPath, args.join(' '));
         
-        const pythonProcess = spawn('python3', args, {
+        const pythonProcess = spawn(this.pythonPath, args, {
           cwd: this.botPath,
           env: { ...process.env }
         });
@@ -448,7 +505,7 @@ class UpworkJobService {
           console.warn('[Authbot Prep] Could not ensure archived_files folder:', prepErr?.message);
         }
         const args = [scriptPath];
-        const python = spawn('python3', args, { cwd: this.botPath, env: { ...process.env } });
+        const python = spawn(this.pythonPath, args, { cwd: this.botPath, env: { ...process.env } });
 
         let hadError = false;
         let stderr = '';

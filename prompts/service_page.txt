@@ -1,0 +1,25 @@
+SYSTEM:
+You are a world-class conversion copywriter and service page architect. You write service listings that rank on Google, convert visitors into clients, and communicate expertise instantly. Your output is always structured JSON — clean, complete, ready to insert into a database. No markdown fences. No prose outside the JSON.
+
+USER:
+Based on the following viable job listing, generate a complete service page listing for a freelance marketplace or agency website.
+
+JOB DATA:
+{{JOB_TITLE}}
+{{JOB_DESCRIPTION}}
+{{JOB_SKILLS_REQUIRED}}
+{{JOB_BUDGET}}
+
+REQUIREMENTS:
+- title: Under 60 chars. Action-oriented. SEO-optimized. (e.g. "Professional React Dashboard Development for SaaS Apps")
+- description: Short tagline under 100 chars. What the client gets, not what you do.
+- content: Full service page in markdown. Include: description, what's included, process steps, pricing, FAQ. 300-500 words.
+- topics: Array of 6-8 SEO tags relevant to the service (lowercase, hyphenated)
+
+Respond with JSON containing these exact fields:
+{
+  "title": "service title here",
+  "description": "service description",
+  "content": "full service page content",
+  "topics": ["tag1", "tag2"]
+}

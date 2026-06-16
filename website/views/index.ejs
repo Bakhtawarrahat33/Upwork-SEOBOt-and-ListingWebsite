@@ -1,0 +1,73 @@
+<%- include('partials/header', { title: 'BAKHT - AI Automation Agency' }) %>
+
+<section class="hero">
+  <div class="container">
+    <h1>AI-Powered Automation Solutions</h1>
+    <p>We transform complex workflows into scalable automation products. Browse our portfolio of AI-driven tools, services, and insights.</p>
+    <div class="hero-links">
+      <a href="/products" class="btn btn-primary">View Products</a>
+      <a href="/services" class="btn btn-secondary">Our Services</a>
+    </div>
+  </div>
+</section>
+
+<% if (products.length > 0) { %>
+<section class="section">
+  <div class="container">
+    <h2 class="section-title">Featured Products</h2>
+    <div class="card-grid">
+      <% products.forEach(product => { %>
+      <a href="/products/<%= product.id %>" class="card">
+        <h3><%= product.title %></h3>
+        <p><%= product.description %></p>
+        <span class="card-date"><%= new Date(product.createdAt).toLocaleDateString() %></span>
+      </a>
+      <% }) %>
+    </div>
+    <div class="section-footer">
+      <a href="/products" class="btn btn-ghost">View All Products &rarr;</a>
+    </div>
+  </div>
+</section>
+<% } %>
+
+<% if (blogs.length > 0) { %>
+<section class="section section-alt">
+  <div class="container">
+    <h2 class="section-title">Latest Insights</h2>
+    <div class="card-grid">
+      <% blogs.forEach(blog => { %>
+      <a href="/blogs/<%= blog.id %>" class="card card-blog">
+        <h3><%= blog.title %></h3>
+        <span class="card-date"><%= new Date(blog.createdAt).toLocaleDateString() %></span>
+      </a>
+      <% }) %>
+    </div>
+    <div class="section-footer">
+      <a href="/blogs" class="btn btn-ghost">Read All Posts &rarr;</a>
+    </div>
+  </div>
+</section>
+<% } %>
+
+<% if (services.length > 0) { %>
+<section class="section">
+  <div class="container">
+    <h2 class="section-title">Our Services</h2>
+    <div class="card-grid">
+      <% services.forEach(service => { %>
+      <a href="/services/<%= service.id %>" class="card">
+        <h3><%= service.title %></h3>
+        <p><%= service.description %></p>
+        <span class="card-date"><%= new Date(service.createdAt).toLocaleDateString() %></span>
+      </a>
+      <% }) %>
+    </div>
+    <div class="section-footer">
+      <a href="/services" class="btn btn-ghost">View All Services &rarr;</a>
+    </div>
+  </div>
+</section>
+<% } %>
+
+<%- include('partials/footer') %>

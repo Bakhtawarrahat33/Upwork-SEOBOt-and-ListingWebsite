@@ -1,0 +1,67 @@
+<%- include('partials/header', { title: 'Jobs - BAKHT' }) %>
+
+<section class="section">
+  <div class="container">
+    <h1 class="page-title">Scraped Jobs</h1>
+
+    <% if (selected.length > 0) { %>
+    <h2 class="section-title">Selected Jobs (<%= selected.length %>)</h2>
+    <div class="table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Niche</th>
+            <th>Platform</th>
+            <th>Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% selected.forEach(job => { %>
+          <tr>
+            <td><%= job.title %></td>
+            <td><%= job.niche || 'N/A' %></td>
+            <td><%= job.platform || 'N/A' %></td>
+            <td><%= new Date(job.createdAt).toLocaleDateString() %></td>
+          </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+    <% } %>
+
+    <% if (processed.length > 0) { %>
+    <h2 class="section-title">Processed Jobs (<%= processed.length %>)</h2>
+    <div class="table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Niche</th>
+            <th>Tool</th>
+            <th>Date</th>
+            <th>URL</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% processed.forEach(job => { %>
+          <tr>
+            <td><%= job.title %></td>
+            <td><%= job.niche || 'N/A' %></td>
+            <td><%= job.tool || 'N/A' %></td>
+            <td><%= new Date(job.createdAt).toLocaleDateString() %></td>
+            <td><% if (job.upworkJobUrl) { %><a href="<%= job.upworkJobUrl %>" target="_blank">View</a><% } %></td>
+          </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+    <% } %>
+
+    <% if (processed.length === 0 && selected.length === 0) { %>
+    <p class="empty-state">No jobs yet. Jobs will appear here once the Upwork scraper processes them.</p>
+    <% } %>
+  </div>
+</section>
+
+<%- include('partials/footer') %>

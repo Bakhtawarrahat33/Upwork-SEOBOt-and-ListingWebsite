@@ -1,0 +1,67 @@
+<%- include('partials/header', { title: `${service.title} - BAKHT` }) %>
+
+<section class="section">
+  <div class="container detail-page">
+    <a href="/services" class="back-link">&larr; Back to Services</a>
+    <h1 class="detail-title"><%= service.title %></h1>
+    
+    <% if (data.TAGLINE) { %>
+    <p class="detail-tagline"><%= data.TAGLINE %></p>
+    <% } %>
+
+    <% if (data.OVERVIEW) { %>
+    <div class="detail-section">
+      <h2>Overview</h2>
+      <p><%= data.OVERVIEW %></p>
+    </div>
+    <% } %>
+
+    <% if (data.WHAT_IS_INCLUDED) { %>
+    <div class="detail-section">
+      <h2>What's Included</h2>
+      <ul>
+        <% data.WHAT_IS_INCLUDED.split('\n').filter(l => l.trim()).forEach(item => { %>
+        <li><%= item.replace(/^-\s*/, '') %></li>
+        <% }) %>
+      </ul>
+    </div>
+    <% } %>
+
+    <% if (data.PROCESS) { %>
+    <div class="detail-section">
+      <h2>Process</h2>
+      <div class="process-steps">
+        <% data.PROCESS.split('\n').filter(l => l.trim()).forEach(step => { %>
+        <div class="process-step"><%= step %></div>
+        <% }) %>
+      </div>
+    </div>
+    <% } %>
+
+    <% if (data.WHO_THIS_IS_FOR) { %>
+    <div class="detail-section">
+      <h2>Who This Is For</h2>
+      <p><%= data.WHO_THIS_IS_FOR %></p>
+    </div>
+    <% } %>
+
+    <% if (data.WHY_CHOOSE_US) { %>
+    <div class="detail-section">
+      <h2>Why Choose Us</h2>
+      <ul>
+        <% data.WHY_CHOOSE_US.split('\n').filter(l => l.trim()).forEach(reason => { %>
+        <li><%= reason.replace(/^-\s*/, '') %></li>
+        <% }) %>
+      </ul>
+    </div>
+    <% } %>
+
+    <% if (data.CALL_TO_ACTION) { %>
+    <div class="detail-section cta-section">
+      <p class="cta-text"><%= data.CALL_TO_ACTION %></p>
+    </div>
+    <% } %>
+  </div>
+</section>
+
+<%- include('partials/footer') %>

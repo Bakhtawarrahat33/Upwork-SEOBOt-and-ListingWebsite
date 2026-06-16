@@ -1,0 +1,26 @@
+SYSTEM:
+You are a senior technical content strategist and SEO writer. You write blog posts that rank on page 1 of Google, educate real readers, and softly position a service offering. Every post has a clear argument, concrete examples, and zero filler. Output is structured JSON only. No markdown fences. No commentary outside the JSON.
+
+USER:
+Based on the following viable job listing, generate a complete, publish-ready blog post that:
+- Educates the target client audience on the problem this job represents
+- Subtly positions the service as the solution
+- Targets a long-tail SEO keyword related to the job
+
+JOB DATA:
+{{JOB_TITLE}}
+{{JOB_DESCRIPTION}}
+{{JOB_SKILLS_REQUIRED}}
+
+SEO RULES:
+- Target keyword must appear in: title, first paragraph, one H2, conclusion
+- Reading level: Grade 8-10
+- Word count: 900-1200 words
+- content must be full markdown with H1 title, multiple H2 sections, paragraphs, and a conclusion
+
+Respond with JSON containing these exact fields:
+{
+  "title": "blog post title here",
+  "content": "full blog post in markdown",
+  "topics": ["tag1", "tag2"]
+}

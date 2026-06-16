@@ -1,0 +1,22 @@
+<%- include('partials/header', { title: 'Services - BAKHT' }) %>
+
+<section class="section">
+  <div class="container">
+    <h1 class="page-title">All Services</h1>
+    <% if (services.length > 0) { %>
+    <div class="card-grid">
+      <% services.forEach(service => { %>
+      <a href="/services/<%= service.id %>" class="card">
+        <h3><%= service.title %></h3>
+        <p><%= service.description %></p>
+        <span class="card-date"><%= new Date(service.createdAt).toLocaleDateString() %></span>
+      </a>
+      <% }) %>
+    </div>
+    <% } else { %>
+    <p class="empty-state">No services yet. Services will appear here once generated from viable jobs.</p>
+    <% } %>
+  </div>
+</section>
+
+<%- include('partials/footer') %>

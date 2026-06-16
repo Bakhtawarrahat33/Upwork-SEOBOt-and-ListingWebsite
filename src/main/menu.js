@@ -43,9 +43,9 @@ const template = [
     role: 'help',
     submenu: [
       {
-        label: 'Learn More',
+        label: 'Listing Website',
         click: async () => {
-          await shell.openExternal('https://github.com');
+          await shell.openExternal('http://localhost:3001');
         },
       },
     ],
