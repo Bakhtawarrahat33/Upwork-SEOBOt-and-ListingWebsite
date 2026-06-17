@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import crypto from 'crypto';
 
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
@@ -29,59 +30,68 @@ function toCamelRow(row: Record<string, unknown>) {
   return toCamel(row);
 }
 
+function createId() {
+  return crypto.randomUUID();
+}
+
+async function tableExists(tableName: string) {
+  const { rows } = await pool.query('SELECT to_regclass($1) AS table_name', [`public.${tableName}`]);
+  return Boolean(rows[0]?.table_name);
+}
+
 // Products (from listing_site.products)
 export async function getProducts() {
-  const { rows } = await pool.query('SELECT * FROM products ORDER BY created_at DESC');
+  const { rows } = await pool.query("SELECT * FROM products WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
   return rows.map(toCamelRow);
 }
 
 export async function getProductById(id: string) {
-  const { rows } = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
+  const { rows } = await pool.query("SELECT * FROM products WHERE id = $1 AND COALESCE(status, 'published') = 'published'", [id]);
   return rows.length ? toCamelRow(rows[0]) : null;
 }
 
 export async function createProduct(data: { title: string; description: string; content: string; topics?: string[]; status?: string }) {
   const { rows } = await pool.query(
-    'INSERT INTO products (title, description, content, topics, status, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *',
-    [data.title, data.description, data.content, JSON.stringify(data.topics || []), data.status || 'published']
+    'INSERT INTO products (id, campaign_id, title, description, content, topics, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $8) RETURNING *',
+    [createId(), 'manual', data.title, data.description, data.content, JSON.stringify(data.topics || []), data.status || 'published', new Date().toISOString()]
   );
   return toCamelRow(rows[0]);
 }
 
 // Blogs (from listing_site.blogs)
 export async function getBlogs() {
-  const { rows } = await pool.query('SELECT * FROM blogs ORDER BY created_at DESC');
+  const { rows } = await pool.query("SELECT * FROM blogs WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
   return rows.map(toCamelRow);
 }
 
 export async function getBlogById(id: string) {
-  const { rows } = await pool.query('SELECT * FROM blogs WHERE id = $1', [id]);
+  const { rows } = await pool.query("SELECT * FROM blogs WHERE id = $1 AND COALESCE(status, 'published') = 'published'", [id]);
   return rows.length ? toCamelRow(rows[0]) : null;
 }
 
 export async function createBlog(data: { title: string; content: string; topics?: string[]; status?: string }) {
   const { rows } = await pool.query(
-    'INSERT INTO blogs (title, content, topics, status, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING *',
-    [data.title, data.content, JSON.stringify(data.topics || []), data.status || 'published']
+    'INSERT INTO blogs (id, campaign_id, title, content, topics, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $7) RETURNING *',
+    [createId(), 'manual', data.title, data.content, JSON.stringify(data.topics || []), data.status || 'published', new Date().toISOString()]
   );
   return toCamelRow(rows[0]);
 }
 
 // Services (from listing_site.services)
 export async function getServices() {
-  const { rows } = await pool.query('SELECT * FROM services ORDER BY created_at DESC');
+  const { rows } = await pool.query("SELECT * FROM services WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
   return rows.map(toCamelRow);
 }
 
 export async function getServiceById(id: string) {
-  const { rows } = await pool.query('SELECT * FROM services WHERE id = $1', [id]);
+  const { rows } = await pool.query("SELECT * FROM services WHERE id = $1 AND COALESCE(status, 'published') = 'published'", [id]);
   return rows.length ? toCamelRow(rows[0]) : null;
 }
 
 export async function createService(data: { title: string; description: string; content: string; topics?: string[]; status?: string }) {
   const { rows } = await pool.query(
-    'INSERT INTO services (title, description, content, topics, status, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *',
-    [data.title, data.description, data.content, JSON.stringify(data.topics || []), data.status || 'published']
+    'INSERT INTO services (id, campaign_id, title, description, content, topics, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $8) RETURNING *',
+    [createId(), 'manual', data.title, data.description, data.content, JSON.stringify(data.topics || []), data.status || 'published', new Date().toISOString()]
   );
   return toCamelRow(rows[0]);
 }
@@ -99,8 +109,8 @@ export async function getJobById(id: string) {
 
 export async function createJob(data: { title: string; description: string; niche?: string; platform?: string; tool?: string; upworkJobUrl?: string }) {
   const { rows } = await pool.query(
-    'INSERT INTO jobs (campaign_id, title, description, niche, platform, tool, upwork_job_url, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING *',
-    ['manual', data.title, data.description, data.niche || '', data.platform || '', data.tool || '', data.upworkJobUrl || '']
+    'INSERT INTO jobs (id, campaign_id, title, description, niche, platform, tool, upwork_job_url, viability, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10) RETURNING *',
+    [createId(), 'manual', data.title, data.description, data.niche || '', data.platform || '', data.tool || '', data.upworkJobUrl || '', 'Yes', new Date().toISOString()]
   );
   return toCamelRow(rows[0]);
 }
@@ -134,7 +144,7 @@ export async function getCampaignStats() {
 export async function getRecentCampaigns(_limit = 5) {
   try {
     const { rows } = await pool.query(
-      'SELECT id, name, status, upwork_search_input as search, progress, created_at FROM upwork_campaigns ORDER BY created_at DESC LIMIT $1',
+      'SELECT id, name, status, upwork_search_input as search, progress, created_at, updated_at FROM upwork_campaigns ORDER BY updated_at::timestamptz DESC NULLS LAST, created_at::timestamptz DESC LIMIT $1',
       [_limit]
     );
     return rows.map(toCamelRow);
@@ -144,8 +154,48 @@ export async function getRecentCampaigns(_limit = 5) {
   }
 }
 
+export async function getSyncStatus() {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        GREATEST(
+          COALESCE((SELECT MAX(synced_at) FROM products), '1970-01-01'::timestamptz),
+          COALESCE((SELECT MAX(synced_at) FROM blogs), '1970-01-01'::timestamptz),
+          COALESCE((SELECT MAX(synced_at) FROM services), '1970-01-01'::timestamptz),
+          COALESCE((SELECT MAX(synced_at) FROM jobs), '1970-01-01'::timestamptz),
+          COALESCE((SELECT MAX(synced_at) FROM upwork_campaigns), '1970-01-01'::timestamptz),
+          COALESCE((SELECT MAX(run_at) FROM sync_audit_log WHERE error IS NULL), '1970-01-01'::timestamptz)
+        ) AS last_synced_at
+    `);
+    const value = rows[0]?.last_synced_at;
+    return { lastSyncedAt: value && new Date(value).getFullYear() > 1970 ? value : null };
+  } catch (err) {
+    console.error('getSyncStatus error:', err);
+    return { lastSyncedAt: null };
+  }
+}
+
 export async function getRecentLogs(_limit = 10) {
   try {
+    if (!(await tableExists('logs'))) {
+      if (!(await tableExists('sync_audit_log'))) return [];
+
+      const { rows } = await pool.query(
+        `SELECT
+          CASE WHEN error IS NULL THEN 'info' ELSE 'error' END AS level,
+          CASE
+            WHEN error IS NULL THEN table_name || ': synced ' || rows_synced || ' row(s)'
+            ELSE table_name || ': ' || error
+          END AS message,
+          run_at AS timestamp
+        FROM sync_audit_log
+        ORDER BY run_at DESC
+        LIMIT $1`,
+        [_limit]
+      );
+      return rows;
+    }
+
     const { rows } = await pool.query(
       `SELECT level, message, timestamp FROM logs ORDER BY timestamp DESC LIMIT $1`,
       [_limit]

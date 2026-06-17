@@ -57,12 +57,20 @@ function normalizeCookiesForContentGen(raw) {
   return [];
 }
 
-async function launchBrowser(cookies) {
+function getStandaloneChatGPTProfileDir(gptAccountId = 'default') {
+  const safeId = String(gptAccountId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const profileDir = path.join(process.cwd(), '.chatgpt-profiles', safeId);
+  fs.mkdirSync(profileDir, { recursive: true });
+  return profileDir;
+}
+
+async function launchBrowser(cookies, gptAccountId = 'default') {
   console.log('   🔧 Launching Puppeteer browser...');
   const puppeteer = (await import('puppeteer')).default;
   const browser = await puppeteer.launch({
     protocolTimeout: 120000,
     headless: false,
+    userDataDir: getStandaloneChatGPTProfileDir(gptAccountId),
     defaultViewport: { width: 1280, height: 800 },
     args: [
       '--no-sandbox',
@@ -86,19 +94,67 @@ async function launchBrowser(cookies) {
   return { browser, page };
 }
 
+async function isStandaloneChatGPTLoggedIn(page) {
+  return await page.evaluate(() => {
+    const text = document.body?.innerText || '';
+    const composerSelector = [
+      'textarea#prompt-textarea',
+      '#prompt-textarea',
+      '[data-testid="prompt-textarea"]',
+      'textarea[placeholder*="Message"]',
+      'textarea[placeholder*="Ask"]',
+      '[role="textbox"][contenteditable="true"]',
+      'div[contenteditable="true"]',
+      '.ProseMirror'
+    ].join(', ');
+    const hasComposer = !!document.querySelector(composerSelector);
+    const hasLoggedInShell = /new chat|search chats|library|projects|apps/i.test(text)
+      && /ask anything|what are you working on|what.?s on your mind/i.test(text);
+    const hasLoginPrompt = /log in or sign up|continue with google|continue with apple|email address/i.test(text);
+    const onAuthRoute = /\/auth\/(login|signup)/.test(window.location.pathname);
+
+    return (hasComposer || hasLoggedInShell) && !hasLoginPrompt && !onAuthRoute;
+  });
+}
+
+async function waitForStandaloneChatGPTLogin(page, logFn, timeoutMs = 600000) {
+  if (await isStandaloneChatGPTLoggedIn(page)) return;
+
+  logFn('   ChatGPT is not logged in. Log in in the opened browser window, then wait here.');
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    await sleep(5000);
+    if (await isStandaloneChatGPTLoggedIn(page)) {
+      logFn('   ChatGPT login detected. Continuing content generation.');
+      return;
+    }
+  }
+
+  throw new Error('Not logged in to ChatGPT after waiting for manual login.');
+}
+
 async function sendPromptToChatGPT(page, prompt, logFn) {
   logFn('   🌐 Navigating to ChatGPT...');
-  await page.goto('https://chatgpt.com', { waitUntil: 'networkidle2', timeout: 30000 });
+  await page.goto('https://chatgpt.com', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await sleep(10000);
+  await waitForStandaloneChatGPTLogin(page, logFn);
+
+  const assistantCountBefore = await page.evaluate(() => {
+    return document.querySelectorAll('[data-message-author-role="assistant"]').length;
+  });
 
   const promptSelectors = [
     '#prompt-textarea',
+    '[data-testid="prompt-textarea"]',
     'textarea[placeholder*="Message"]',
     'textarea[placeholder*="Send"]',
     'textarea[placeholder*="Ask"]',
     'div[contenteditable="true"][data-placeholder*="Message"]',
     'div[contenteditable="true"][data-placeholder*="Ask"]',
     'div[role="textbox"][contenteditable="true"]',
+    '[role="textbox"][contenteditable="true"]',
+    'div[contenteditable="true"]',
+    '.ProseMirror',
     'textarea',
   ];
 
@@ -121,7 +177,12 @@ async function sendPromptToChatGPT(page, prompt, logFn) {
   } else {
     await textarea.evaluate((el, text) => {
       el.focus();
+      el.textContent = '';
       document.execCommand('insertText', false, text);
+      if ((el.textContent || '').length < text.length * 0.9) {
+        el.textContent = text;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
     }, prompt);
   }
 
@@ -156,29 +217,27 @@ async function sendPromptToChatGPT(page, prompt, logFn) {
 
   await sleep(5000);
 
-  await waitForResponseComplete(page, 120000, logFn);
+  const streamedResponseText = await waitForResponseComplete(page, 120000, logFn, assistantCountBefore);
 
-  const responseText = await page.evaluate(() => {
-    const assistantMsg = document.querySelector(
-      '[data-message-author-role="assistant"]:last-child, ' +
-      '.agent-turn:last-child .markdown, ' +
-      '[data-testid="conversation-turn"]:last-child, ' +
-      '[data-message-author-role="assistant"]:last-child, ' +
-      '.prose:last-child, ' +
-      '[class*="message-"]:last-child'
-    );
-    if (assistantMsg) return assistantMsg.textContent.trim();
+  let responseText = await page.evaluate((previousAssistantCount) => {
+    const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+    const newAssistantMessages = assistantMessages.slice(previousAssistantCount);
+    const assistantMsg = newAssistantMessages[newAssistantMessages.length - 1] || assistantMessages[assistantMessages.length - 1];
+    if (!assistantMsg) return '';
 
-    const articles = document.querySelectorAll('article');
-    const lastArticle = articles[articles.length - 1];
-    return lastArticle ? lastArticle.textContent.trim() : '';
-  });
+    const markdown = assistantMsg.querySelector('.markdown, div[class*="markdown"], .prose');
+    return (markdown?.textContent || assistantMsg.textContent || '').trim();
+  }, assistantCountBefore);
+
+  if (!responseText && streamedResponseText) {
+    responseText = streamedResponseText;
+  }
 
   logFn(`   ✅ ChatGPT response received (${responseText.length} chars)`);
   return responseText;
 }
 
-async function waitForResponseComplete(page, timeoutMs = 120000, logFn) {
+async function waitForResponseComplete(page, timeoutMs = 120000, logFn, previousAssistantCount = 0) {
   const startTime = Date.now();
   logFn('⏳ Waiting for GPT response to complete...');
 
@@ -187,21 +246,20 @@ async function waitForResponseComplete(page, timeoutMs = 120000, logFn) {
   let stableCount = 0;
   let lastLength = 0;
   let lastChangeTime = Date.now();
+  let latestResponseText = '';
+  let latestResponseLength = 0;
+  let hadResponseText = false;
 
   while (Date.now() - startTime < timeoutMs) {
-    const status = await page.evaluate(() => {
+    const status = await page.evaluate((assistantBaseline) => {
       const stopButton = document.querySelector(
         '[data-testid="stop-button"], ' +
         'button[aria-label*="Stop" i]'
       );
 
-      const assistantMessages = document.querySelectorAll(
-        '[data-message-author-role="assistant"], ' +
-        '[data-testid="conversation-turn"], ' +
-        '.agent-turn, ' +
-        '[class*="message-"]'
-      );
-      const lastMessage = assistantMessages[assistantMessages.length - 1];
+      const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+      const newAssistantMessages = assistantMessages.slice(assistantBaseline);
+      const lastMessage = newAssistantMessages[newAssistantMessages.length - 1];
 
       const markdown = lastMessage?.querySelector(
         '.markdown, ' +
@@ -210,14 +268,27 @@ async function waitForResponseComplete(page, timeoutMs = 120000, logFn) {
       );
 
       const responseText = markdown?.textContent || lastMessage?.textContent || '';
+      const cleanText = responseText.trim();
 
       return {
         isStreaming: !!stopButton,
         hasResponse: !!lastMessage,
-        responseText: responseText.trim().length,
-        preview: responseText.trim().substring(0, 100)
+        responseText: cleanText.length,
+        fullText: cleanText,
+        preview: cleanText.substring(0, 100)
       };
     });
+
+    if (status.responseText > 0) {
+      latestResponseText = status.fullText;
+      latestResponseLength = status.responseText;
+      hadResponseText = true;
+    }
+
+    if (!status.isStreaming && hadResponseText && status.responseText === 0) {
+      logFn(`âœ… Response complete (using captured stream at ${latestResponseLength} chars)`);
+      return latestResponseText;
+    }
 
     if (!status.isStreaming && status.hasResponse && status.responseText > 100) {
       if (status.responseText === lastLength) {
@@ -226,7 +297,7 @@ async function waitForResponseComplete(page, timeoutMs = 120000, logFn) {
         const timeSinceChange = Date.now() - lastChangeTime
         if (stableCount >= 4 && timeSinceChange >= 6000) {
           logFn(`✅ Response complete (stable at ${status.responseText} chars)`)
-          return true
+          return latestResponseText || status.fullText
         }
       } else {
         stableCount = 0
@@ -240,7 +311,7 @@ async function waitForResponseComplete(page, timeoutMs = 120000, logFn) {
   }
 
   logFn('⚠️ Timeout waiting for response — proceeding with extraction');
-  return false;
+  return latestResponseText;
 }
 
 function fillPrompt(template, vars) {
@@ -263,7 +334,7 @@ function parseProductResponse(text) {
     return { title, description, content, topics, features: [], raw: result }
   } catch (err) {
     console.error('❌ parseProductResponse failed:', err.message)
-    return { title: 'Untitled Product', description: '', content: text, topics: [], features: [] }
+    return { title: 'Untitled Product', description: '', content: '', topics: [], features: [] }
   }
 }
 
@@ -281,7 +352,7 @@ function parseBlogResponse(text) {
     return { title, content, metaDescription, category, tags, topics, blogSlug }
   } catch (err) {
     console.error('❌ parseBlogResponse failed:', err.message)
-    return { title: 'Untitled Blog Post', content: text, metaDescription: '', category: 'General', tags: [], topics: [], blogSlug: '' }
+    return { title: 'Untitled Blog Post', content: '', metaDescription: '', category: 'General', tags: [], topics: [], blogSlug: '' }
   }
 }
 
@@ -297,8 +368,46 @@ function parseServiceResponse(text) {
     return { title, description, content, topics, serviceSlug, deliverables: [] }
   } catch (err) {
     console.error('❌ parseServiceResponse failed:', err.message)
-    return { title: 'Untitled Service', description: '', content: text, topics: [], serviceSlug: '', deliverables: [] }
+    return { title: 'Untitled Service', description: '', content: '', topics: [], serviceSlug: '', deliverables: [] }
   }
+}
+
+function isPlaceholderText(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return true;
+  return [
+    'blog post title here',
+    'product title here',
+    'service title here',
+    'short description',
+    'service description',
+    'full product page content',
+    'full blog post in markdown',
+    'full service page content',
+    '<original product title>',
+    '<original seo blog title>',
+    '<original service title>',
+    '<specific product outcome tagline>',
+    '<specific client outcome tagline>',
+    '<complete markdown product page content>',
+    '<complete markdown blog post>',
+    '<complete markdown service page content>',
+    'untitled product',
+    'untitled blog post',
+    'untitled service'
+  ].some((placeholder) => text === placeholder || text.includes(placeholder));
+}
+
+function hasGeneratedContentQuality(item, type) {
+  if (!item || isPlaceholderText(item.title) || isPlaceholderText(item.content)) return false;
+  const content = String(item.content || '').trim();
+  if (/^(system|user|assistant)\s*:/i.test(content)) return false;
+  if (/\brespond with one valid json object only\b/i.test(content)) return false;
+  if (/\{\{\s*job_/i.test(content)) return false;
+  if (content.length < 250) return false;
+  if (type === 'product' && isPlaceholderText(item.description)) return false;
+  if (type === 'service' && isPlaceholderText(item.description)) return false;
+  return true;
 }
 
 async function retryAsync(fn, options = {}) {
@@ -317,12 +426,12 @@ async function retryAsync(fn, options = {}) {
   throw lastError;
 }
 
-async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, logFn, shouldAbort, jobSkills, jobBudget }) {
+async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, gptAccountId, logFn, shouldAbort, jobSkills, jobBudget }) {
   logFn(`\n${'='.repeat(60)}`);
   logFn(`🔄 PIPELINE START: ${jobTitle}`);
   logFn(`${'='.repeat(60)}`);
 
-  const { browser, page } = await launchBrowser(cookies);
+  const { browser, page } = await launchBrowser(cookies, gptAccountId);
 
   const result = {
     product: null,
@@ -360,7 +469,7 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, l
           console.log('🔍 RAW PRODUCT RESPONSE (first 500 chars):', productResponse.substring(0, 500))
           productParsed = parseProductResponse(productResponse);
 
-          if (productParsed.content.length > 50 && productParsed.title !== 'Untitled Product') {
+          if (hasGeneratedContentQuality(productParsed, 'product')) {
             break;
           }
 
@@ -375,14 +484,14 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, l
         await sleep(3000);
       }
 
-      if (productParsed && productParsed.content.length > 0) {
+      if (hasGeneratedContentQuality(productParsed, 'product')) {
         result.product = await storage.createProduct({
           campaignId,
           title: productParsed.title,
           description: productParsed.description,
           content: productParsed.content,
           topics: productParsed.topics,
-          status: productParsed.content.length > 50 ? 'published' : 'draft',
+          status: 'published',
         });
         result.productParsed = productParsed;
         hasAnySuccess = true;
@@ -411,7 +520,7 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, l
           console.log('🔍 RAW BLOG RESPONSE (first 500 chars):', blogResponse.substring(0, 500))
           blogParsed = parseBlogResponse(blogResponse);
 
-          if (blogParsed.content.length > 50 && blogParsed.title !== 'Untitled Blog Post') {
+          if (hasGeneratedContentQuality(blogParsed, 'blog')) {
             break;
           }
 
@@ -426,13 +535,13 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, l
         await sleep(3000);
       }
 
-      if (blogParsed && blogParsed.content.length > 0) {
+      if (hasGeneratedContentQuality(blogParsed, 'blog')) {
         result.blog = await storage.createBlogPost({
           campaignId,
           title: blogParsed.title,
           content: blogParsed.content,
           topics: blogParsed.topics,
-          status: blogParsed.content.length > 50 ? 'published' : 'draft',
+          status: 'published',
         });
         result.blogParsed = blogParsed;
         hasAnySuccess = true;
@@ -461,7 +570,7 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, l
           console.log('🔍 RAW SERVICE RESPONSE (first 500 chars):', serviceResponse.substring(0, 500))
           serviceParsed = parseServiceResponse(serviceResponse);
 
-          if (serviceParsed.content.length > 50 && serviceParsed.title !== 'Untitled Service') {
+          if (hasGeneratedContentQuality(serviceParsed, 'service')) {
             break;
           }
 
@@ -476,14 +585,14 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, l
         await sleep(3000);
       }
 
-      if (serviceParsed && serviceParsed.content.length > 0) {
+      if (hasGeneratedContentQuality(serviceParsed, 'service')) {
         result.service = await storage.createService({
           campaignId,
           title: serviceParsed.title,
           description: serviceParsed.description,
           content: serviceParsed.content,
           topics: serviceParsed.topics,
-          status: serviceParsed.content.length > 50 ? 'published' : 'draft',
+          status: 'published',
         });
         result.serviceParsed = serviceParsed;
         hasAnySuccess = true;
@@ -548,6 +657,7 @@ class UpworkCampaignManager extends EventEmitter {
     const baseDelay = options.baseDelay || 2000;
     const maxDelay = options.maxDelay || 20000;
     const onRetry = options.onRetry || (() => {});
+    const shouldRetry = options.shouldRetry || (() => true);
 
     let lastError;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -555,6 +665,7 @@ class UpworkCampaignManager extends EventEmitter {
         return await fn();
       } catch (error) {
         lastError = error;
+        if (!shouldRetry(error)) break;
         if (attempt === maxRetries) break;
         const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
         onRetry(attempt + 1, delay, error);
@@ -585,6 +696,10 @@ class UpworkCampaignManager extends EventEmitter {
    */
   isCircuitOpen(campaignId) {
     return (this.failureCounts.get(campaignId) || 0) >= this.circuitBreakerThreshold;
+  }
+
+  isChatGPTAuthError(error) {
+    return /not logged in to chatgpt|update gpt account cookies|cookies marked invalid/i.test(error?.message || '');
   }
 
   /**
@@ -715,6 +830,61 @@ class UpworkCampaignManager extends EventEmitter {
    * @param {string} cookies - GPT account cookies
    * @returns {Promise<{viable: boolean, niche: string, platform: string, tool: string}>}
    */
+  getChatGPTComposerSelector() {
+    return [
+      'textarea#prompt-textarea',
+      '#prompt-textarea',
+      '[data-testid="prompt-textarea"]',
+      'textarea[placeholder*="Message"]',
+      'textarea[placeholder*="Ask"]',
+      '[role="textbox"][contenteditable="true"]',
+      'div[contenteditable="true"]',
+      '.ProseMirror'
+    ].join(', ');
+  }
+
+  async navigateToChatGPT(page, campaignId) {
+    try {
+      await page.goto('https://chatgpt.com/', {
+        waitUntil: 'domcontentloaded',
+        timeout: 90000
+      });
+    } catch (error) {
+      if (!/timeout/i.test(error.message || '')) throw error;
+      this.log(campaignId, 'warning', 'ChatGPT navigation was slow, continuing with the loaded page.');
+    }
+
+    await page.waitForFunction(() => document.body && document.readyState !== 'loading', { timeout: 30000 }).catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+
+  async waitForChatGPTComposer(page) {
+    const selector = this.getChatGPTComposerSelector();
+    await page.waitForFunction((composerSelector) => {
+      const candidates = Array.from(document.querySelectorAll(composerSelector));
+      return candidates.some((el) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      });
+    }, { timeout: 45000 }, selector);
+    return selector;
+  }
+
+  async focusChatGPTComposer(page, selector = this.getChatGPTComposerSelector()) {
+    await page.evaluate((composerSelector) => {
+      const candidates = Array.from(document.querySelectorAll(composerSelector));
+      const el = candidates.find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        const style = window.getComputedStyle(candidate);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      });
+      if (!el) throw new Error('Visible ChatGPT prompt input not found');
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      el.focus();
+    }, selector);
+  }
+
   /**
    * Send prompt using clipboard paste method (most reliable)
    */
@@ -735,10 +905,8 @@ class UpworkCampaignManager extends EventEmitter {
         document.body.removeChild(textArea);
       }, prompt);
       
-      // Find textarea and focus it
-      const textareaSelector = 'textarea#prompt-textarea, textarea[placeholder*="Message"], div[contenteditable="true"]';
-      await page.waitForSelector(textareaSelector, { timeout: 10000 });
-      await page.click(textareaSelector);
+      const textareaSelector = await this.waitForChatGPTComposer(page);
+      await this.focusChatGPTComposer(page, textareaSelector);
       
       // Wait a moment
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -755,7 +923,11 @@ class UpworkCampaignManager extends EventEmitter {
       
       // Verify the text was pasted
       const textContent = await page.evaluate((selector) => {
-        const textarea = document.querySelector(selector);
+        const textarea = Array.from(document.querySelectorAll(selector)).find((candidate) => {
+          const rect = candidate.getBoundingClientRect();
+          const style = window.getComputedStyle(candidate);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+        });
         return textarea ? (textarea.value || textarea.textContent || textarea.innerText) : '';
       }, textareaSelector);
       
@@ -766,7 +938,7 @@ class UpworkCampaignManager extends EventEmitter {
       
     } catch (error) {
       logFn(`⚠️ Clipboard method failed: ${error.message}, trying direct DOM method...`);
-      const textareaSelector = 'textarea#prompt-textarea, textarea[placeholder*="Message"], div[contenteditable="true"]';
+      const textareaSelector = await this.waitForChatGPTComposer(page);
       await this.sendPromptDirectDOM(page, prompt, textareaSelector);
     }
     
@@ -778,11 +950,28 @@ class UpworkCampaignManager extends EventEmitter {
     const sendButtonSelector = 'button[data-testid="send-button"], button[aria-label*="Send"]';
     
     try {
-      await page.waitForSelector(sendButtonSelector, { timeout: 5000 });
-      await page.click(sendButtonSelector);
+      await page.waitForFunction((selector) => {
+        return Array.from(document.querySelectorAll(selector)).some((button) => {
+          const rect = button.getBoundingClientRect();
+          const style = window.getComputedStyle(button);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !button.disabled;
+        });
+      }, { timeout: 7000 }, sendButtonSelector);
+      const clicked = await page.evaluate((selector) => {
+        const button = Array.from(document.querySelectorAll(selector)).find((candidate) => {
+          const rect = candidate.getBoundingClientRect();
+          const style = window.getComputedStyle(candidate);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !candidate.disabled;
+        });
+        if (!button) return false;
+        button.click();
+        return true;
+      }, sendButtonSelector);
+      if (!clicked) throw new Error('Visible send button not found');
     } catch (e) {
       // Fallback: press Enter
       logFn(`⚠️ Send button not found, using Enter key...`);
+      await this.focusChatGPTComposer(page).catch(() => {});
       await page.keyboard.press('Enter');
     }
     
@@ -794,8 +983,12 @@ class UpworkCampaignManager extends EventEmitter {
    */
   async sendPromptDirectDOM(page, prompt, textareaSelector) {
     await page.evaluate((selector, text) => {
-      const el = document.querySelector(selector);
-      if (!el) return;
+      const el = Array.from(document.querySelectorAll(selector)).find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        const style = window.getComputedStyle(candidate);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      });
+      if (!el) throw new Error('ChatGPT prompt input not found');
 
       if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
         el.value = text;
@@ -803,7 +996,11 @@ class UpworkCampaignManager extends EventEmitter {
         el.dispatchEvent(new Event('change', { bubbles: true }));
       } else if (el.contentEditable === 'true') {
         el.focus();
-        el.textContent = text;
+        el.textContent = '';
+        document.execCommand('insertText', false, text);
+        if ((el.textContent || '').length < text.length * 0.9) {
+          el.textContent = text;
+        }
         el.dispatchEvent(new Event('input', { bubbles: true }));
         
         const inputEvent = new InputEvent('input', {
@@ -813,6 +1010,8 @@ class UpworkCampaignManager extends EventEmitter {
           data: text
         });
         el.dispatchEvent(inputEvent);
+      } else {
+        throw new Error('ChatGPT prompt input is not editable');
       }
     }, textareaSelector, prompt);
   }
@@ -1038,6 +1237,106 @@ class UpworkCampaignManager extends EventEmitter {
     }).filter(Boolean);
   }
 
+  async verifyChatGPTLoggedIn(page) {
+    return await page.evaluate(() => {
+      const text = document.body?.innerText || '';
+      const composerSelector = [
+        'textarea#prompt-textarea',
+        '#prompt-textarea',
+        '[data-testid="prompt-textarea"]',
+        'textarea[placeholder*="Message"]',
+        'textarea[placeholder*="Ask"]',
+        '[role="textbox"][contenteditable="true"]',
+        'div[contenteditable="true"]',
+        '.ProseMirror'
+      ].join(', ');
+      const hasComposer = !!document.querySelector(composerSelector);
+      const hasLoggedInShell = /new chat|search chats|library|projects|apps/i.test(text)
+        && /ask anything|what are you working on|what.?s on your mind/i.test(text);
+      const hasLoginPrompt = /log in or sign up|continue with google|continue with apple|email address/i.test(text);
+      const onAuthRoute = /\/auth\/(login|signup)/.test(window.location.pathname);
+
+      return (hasComposer || hasLoggedInShell) && !hasLoginPrompt && !onAuthRoute;
+    });
+  }
+
+  async findLoggedInChatGPTPage(browser) {
+    const pages = await browser.pages();
+    for (const candidate of pages) {
+      try {
+        const url = candidate.url();
+        if (!/chatgpt\.com/.test(url)) continue;
+        if (await this.verifyChatGPTLoggedIn(candidate)) {
+          await candidate.bringToFront();
+          return candidate;
+        }
+      } catch {}
+    }
+    return null;
+  }
+
+  getChatGPTProfileDir(gptAccountId = 'default') {
+    const safeId = String(gptAccountId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const profileDir = path.join(process.cwd(), '.chatgpt-profiles', safeId);
+    fs.mkdirSync(profileDir, { recursive: true });
+    return profileDir;
+  }
+
+  async launchChatGPTBrowser(puppeteer, gptAccountId) {
+    const profileDir = this.getChatGPTProfileDir(gptAccountId);
+    const browser = await puppeteer.launch({
+      protocolTimeout: 120000,
+      headless: false,
+      userDataDir: profileDir,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-dev-shm-usage',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process'
+      ],
+      ignoreDefaultArgs: ['--enable-automation'],
+      defaultViewport: { width: 1920, height: 1080 }
+    });
+
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    return { browser, page, profileDir };
+  }
+
+  async ensureChatGPTSession(page, campaignId, gptAccountId, timeoutMs = 600000) {
+    if (await this.verifyChatGPTLoggedIn(page)) {
+      return page;
+    }
+
+    const profileDir = this.getChatGPTProfileDir(gptAccountId);
+    this.log(campaignId, 'warning', 'ChatGPT is not logged in. A browser window is open for manual login.');
+    this.log(campaignId, 'info', `Log in to ChatGPT in the opened browser, then wait here. Profile: ${profileDir}`);
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      try {
+        const loggedInPage = await this.findLoggedInChatGPTPage(page.browser());
+        if (loggedInPage) {
+          this.clearInvalidGptAccount(gptAccountId);
+          this.log(campaignId, 'success', 'ChatGPT login detected. Continuing automation.');
+          return loggedInPage;
+        }
+
+        if (await this.verifyChatGPTLoggedIn(page)) {
+          this.clearInvalidGptAccount(gptAccountId);
+          this.log(campaignId, 'success', 'ChatGPT login detected. Continuing automation.');
+          return page;
+        }
+      } catch {}
+    }
+
+    if (gptAccountId) this.markGptAccountInvalid(gptAccountId);
+    throw new Error('Not logged in to ChatGPT after waiting for manual login.');
+  }
+
   async filterJobWithGPT(jobDetails, cookies, campaignId, gptAccountId) {
     this.log(campaignId, 'info', `🤖 Filtering job: ${jobDetails.title}`);
 
@@ -1046,6 +1345,7 @@ class UpworkCampaignManager extends EventEmitter {
       {
         maxRetries: 1,
         baseDelay: 3000,
+        shouldRetry: (err) => !this.isChatGPTAuthError(err),
         onRetry: (attempt, delay, err) => {
           this.log(campaignId, 'warning', `🔄 filterJobWithGPT retry ${attempt}/1 after ${delay}ms — ${err.message}`);
         }
@@ -1072,29 +1372,12 @@ class UpworkCampaignManager extends EventEmitter {
 
       this.log(campaignId, 'info', 'Sending job to GPT for viability check...');
 
-      // Launch headless browser (same as apifyToGPTProcessor)
-      browser = await puppeteer.launch({
-        protocolTimeout: 120000,
-        headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-dev-shm-usage',
-          '--disable-web-security',
-          '--disable-features=IsolateOrigins,site-per-process'
-        ],
-        ignoreDefaultArgs: ['--enable-automation'],
-        defaultViewport: { width: 1920, height: 1080 }
-      });
-
-      const page = await browser.newPage();
+      const launched = await this.launchChatGPTBrowser(puppeteer, gptAccountId);
+      browser = launched.browser;
+      let page = launched.page;
 
       // Register active browser for force-stop support
       this.activeBrowsers.set(campaignId, browser);
-
-      // Set realistic user agent
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
       // Load cookies with sanitization (handles both ARRAY and OBJECT formats)
       const sanitizedCookies = this.sanitizeCookies(cookies);
@@ -1105,28 +1388,11 @@ class UpworkCampaignManager extends EventEmitter {
         this.log(campaignId, 'warning', '⚠️ No valid cookies to set — GPT session may fail');
       }
 
-      // Navigate to ChatGPT
-      await page.goto('https://chatgpt.com/', {
-        waitUntil: 'networkidle2',
-        timeout: 60000
-      });
+      await this.navigateToChatGPT(page, campaignId);
 
-      // Wait for page load
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      page = await this.ensureChatGPTSession(page, campaignId, gptAccountId);
 
-      // Check if logged in
-      const isLoggedIn = await page.evaluate(() => {
-        return !document.URL.includes('/auth/login');
-      });
-
-      if (!isLoggedIn) {
-        // Mark account invalid so we don't keep retrying with bad cookies
-        if (gptAccountId) this.markGptAccountInvalid(gptAccountId);
-        throw new Error('Not logged in to ChatGPT. Please update GPT account cookies.');
-      }
-
-      // Wait for textarea
-      await page.waitForSelector('textarea, div[contenteditable="true"]', { timeout: 30000 });
+      await this.waitForChatGPTComposer(page);
 
       // Send prompt using helper method (same as apifyToGPTProcessor)
       await this.sendPromptToGPT(page, fullPrompt, (msg) => this.log(campaignId, 'info', msg));
@@ -1160,7 +1426,7 @@ class UpworkCampaignManager extends EventEmitter {
         this.log(campaignId, 'info', `   Open Source Viable: ${result.open_source_viable}`);
         this.log(campaignId, 'info', `   Niche: ${result.niche}`);
         this.log(campaignId, 'info', `   Platform: ${result.platform}`);
-        this.log(campaignId, 'info', `   Platform Domain: ${result['platform domain'] || 'None'}`);
+        this.log(campaignId, 'info', `   Platform Domain: ${result.platformDomain || 'None'}`);
         this.log(campaignId, 'info', `   Tool: ${result.tool}`);
 
       } catch (jsonError) {
@@ -1210,7 +1476,7 @@ class UpworkCampaignManager extends EventEmitter {
         viable: isViable,
         niche: result.niche,
         platform: result.platform,
-        platformDomain: result['platform domain'] || 'None',
+        platformDomain: result.platformDomain || 'None',
         tool: result.tool,
         reason: result.reason || (isViable ? 'Viability check passed' : 'Viability check failed')
       };
@@ -1235,7 +1501,7 @@ class UpworkCampaignManager extends EventEmitter {
    * @param {string} cookies - GPT account cookies
    * @returns {Promise<Object>} Parsed README data
    */
-  async generateReadmeForJob(jobDetails, niche, platform, tool, cookies, campaignId) {
+  async generateReadmeForJob(jobDetails, niche, platform, tool, cookies, campaignId, gptAccountId = 'default') {
     this.log(campaignId, 'info', `📝 Generating ${niche} README for: ${jobDetails.title}`);
     
     const puppeteer = (await import('puppeteer')).default;
@@ -1262,29 +1528,12 @@ class UpworkCampaignManager extends EventEmitter {
       this.log(campaignId, 'info', `   Platform: ${platform}`);
       this.log(campaignId, 'info', `   Tool: ${tool}`);
       
-      // Launch headless browser (same as apifyToGPTProcessor)
-      browser = await puppeteer.launch({
-        protocolTimeout: 120000,
-        headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-dev-shm-usage',
-          '--disable-web-security',
-          '--disable-features=IsolateOrigins,site-per-process'
-        ],
-        ignoreDefaultArgs: ['--enable-automation'],
-        defaultViewport: { width: 1920, height: 1080 }
-      });
-
-      const page = await browser.newPage();
+      const launched = await this.launchChatGPTBrowser(puppeteer, gptAccountId);
+      browser = launched.browser;
+      let page = launched.page;
 
       // Register active browser for force-stop support
       this.activeBrowsers.set(campaignId, browser);
-
-      // Set realistic user agent
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
       // Load cookies with sanitization (handles both ARRAY and OBJECT formats)
       const sanitizedCookies = this.sanitizeCookies(cookies);
@@ -1295,26 +1544,11 @@ class UpworkCampaignManager extends EventEmitter {
         this.log(campaignId, 'warning', '⚠️ No valid cookies to set — GPT session may fail');
       }
 
-      // Navigate to ChatGPT
-      await page.goto('https://chatgpt.com/', { 
-        waitUntil: 'networkidle2',
-        timeout: 60000 
-      });
+      await this.navigateToChatGPT(page, campaignId);
 
-      // Wait for page load
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      page = await this.ensureChatGPTSession(page, campaignId, gptAccountId);
 
-      // Check if logged in
-      const isLoggedIn = await page.evaluate(() => {
-        return !document.URL.includes('/auth/login');
-      });
-
-      if (!isLoggedIn) {
-        throw new Error('Not logged in to ChatGPT. Please update GPT account cookies.');
-      }
-
-      // Wait for textarea
-      await page.waitForSelector('textarea, div[contenteditable="true"]', { timeout: 30000 });
+      await this.waitForChatGPTComposer(page);
 
       // Send prompt using helper method (same as apifyToGPTProcessor)
       await this.sendPromptToGPT(page, fullPrompt, (msg) => this.log(campaignId, 'info', msg));
@@ -1679,6 +1913,7 @@ class UpworkCampaignManager extends EventEmitter {
                 jobDescription,
                 cookies,
                 campaignId: id,
+                gptAccountId: campaign.gptAccountId,
                 logFn: (msg) => this.log(id, 'info', msg),
                 shouldAbort: () => !this.running.get(id),
                 jobSkills: job.skills ? (Array.isArray(job.skills) ? job.skills.join(', ') : job.skills) : 'Not specified',
@@ -1747,10 +1982,20 @@ class UpworkCampaignManager extends EventEmitter {
             
           } catch (error) {
             this.log(id, 'error', `Failed to process job: ${error.message}`);
-            // Continue with next job
+            if (this.isChatGPTAuthError(error)) {
+              this.log(id, 'error', 'Stopping campaign because the selected GPT account is not logged in.');
+              await this.setStatus(id, 'Failed');
+              this.running.delete(id);
+              break;
+            }
+            // Continue with next job for non-auth failures
           }
         }
         
+        if (!this.running.get(id)) {
+          break;
+        }
+
         // After processing batch, wait 30 seconds before next poll
         this.log(id, 'info', '✅ Batch processed. Waiting 30 seconds before next scan...');
         if (duplicatesSkipped > 0) {
@@ -1779,8 +2024,13 @@ class UpworkCampaignManager extends EventEmitter {
       this.log(id, 'info', 'Campaign stopped by user');
       this.stoppedByUser.delete(id);
     } else {
-      this.log(id, 'success', `Campaign completed - Total duplicates prevented: ${duplicatesSkipped}`);
-      await this.setStatus(id, 'Completed');
+      const latestCampaign = await storage.getUpworkCampaign(id);
+      if (latestCampaign?.status === 'Failed') {
+        this.log(id, 'error', 'Campaign ended with Failed status');
+      } else {
+        this.log(id, 'success', `Campaign completed - Total duplicates prevented: ${duplicatesSkipped}`);
+        await this.setStatus(id, 'Completed');
+      }
     }
 
   } catch (error) {
@@ -2134,6 +2384,7 @@ async startScrapeJobsCampaign(id) {
             jobDescription,
             cookies,
             campaignId: id,
+            gptAccountId: campaign.gptAccountId,
             logFn: (msg) => this.log(id, 'info', msg),
             shouldAbort: () => !this.running.get(id),
             jobSkills: jobEntry.skills || 'Not specified',

@@ -12,6 +12,14 @@ export default function Campaigns() {
   useEffect(() => {
     loadCampaigns();
     loadGPTAccounts();
+
+    const offStatus = window.api?.onUpworkCampaignStatus?.(() => loadCampaigns());
+    const offProgress = window.api?.onProgress?.(() => loadCampaigns());
+
+    return () => {
+      offStatus?.();
+      offProgress?.();
+    };
   }, []);
 
   const loadCampaigns = async () => {

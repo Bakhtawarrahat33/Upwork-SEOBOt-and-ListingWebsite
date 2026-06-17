@@ -12,6 +12,8 @@ build/
 
 # Electron state
 state.json
+.chatgpt-profiles/
+gpt-timeout-*.png
 
 # Environment
 .env

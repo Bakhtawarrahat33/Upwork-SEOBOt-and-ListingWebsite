@@ -18,9 +18,5 @@ SEO RULES:
 - Word count: 900-1200 words
 - content must be full markdown with H1 title, multiple H2 sections, paragraphs, and a conclusion
 
-Respond with JSON containing these exact fields:
-{
-  "title": "blog post title here",
-  "content": "full blog post in markdown",
-  "topics": ["tag1", "tag2"]
-}
+Respond with one valid JSON object only. The object must contain these keys: title, content, topics.
+Every value must be original, job-specific content. Never output placeholder text, angle-bracket text, schema labels, or example wording.

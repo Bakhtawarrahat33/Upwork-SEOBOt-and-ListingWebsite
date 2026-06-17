@@ -8,13 +8,14 @@ export default function Dashboard() {
     runningCampaigns: 0,
     completedCampaigns: 0,
   });
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
 
   const [recentActivity, setRecentActivity] = useState([]);
 
   useEffect(() => {
     const loadStats = async () => {
-      if (window.api && window.api.listCampaigns) {
-        const campaigns = await window.api.listCampaigns();
+      if (window.api && window.api.listUpworkCampaigns) {
+        const campaigns = await window.api.listUpworkCampaigns();
         
         const total = campaigns.length;
         const running = campaigns.filter(c => c.status === 'Running').length;
@@ -30,12 +31,23 @@ export default function Dashboard() {
           .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
           .slice(0, 5);
         setRecentActivity(recent);
+
+        if (window.api.getPipelineSyncStatus) {
+          const syncStatus = await window.api.getPipelineSyncStatus();
+          setLastSyncedAt(syncStatus.lastSourceUpdateAt || null);
+        }
       }
     };
 
     loadStats();
+    const offStatus = window.api?.onUpworkCampaignStatus?.(() => loadStats());
+    const offProgress = window.api?.onProgress?.(() => loadStats());
     const interval = setInterval(loadStats, 3000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      offStatus?.();
+      offProgress?.();
+    };
   }, []);
 
   const statCards = [
@@ -81,6 +93,9 @@ export default function Dashboard() {
             <div>
               <h1 className="text-3xl font-bold text-white">Dashboard</h1>
               <p className="text-neutral-400">Overview of your content generation pipeline</p>
+              <p className="text-xs text-neutral-500 mt-1">
+                Last synced: {lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : 'Not synced yet'}
+              </p>
             </div>
           </div>
         </div>

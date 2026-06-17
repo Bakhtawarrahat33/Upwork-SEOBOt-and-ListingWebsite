@@ -42,6 +42,11 @@ Use these exact values only:
 "Google Sheets" | "Kommo" | "Pipedrive" | "Bubble" | "Webflow" |
 "Telegram" | "WhatsApp" | "Slack" | "Discord" | "Other" | "None"
 
+Important platform rules:
+- "HighLevel", "Go High Level", and "GHL" are aliases for "GoHighLevel".
+- If a CRM/business platform and an automation connector are both present, use the CRM/business platform as "platform" and the connector as "tool".
+- Example: HighLevel + Zapier => platform "GoHighLevel", tool "Zapier".
+
 TOOL DETECTION:
 Identify the PRIMARY tool/technology used.
 If none detected clearly, use "None"

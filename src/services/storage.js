@@ -13,6 +13,40 @@ const POOL_CONFIG = {
   connectionTimeoutMillis: 15000,
 };
 
+const LISTING_POOL_CONFIG = {
+  host: process.env.LISTING_DB_HOST || 'localhost',
+  port: Number(process.env.LISTING_DB_PORT) || 5432,
+  user: process.env.LISTING_DB_USER || 'postgres',
+  password: process.env.LISTING_DB_PASSWORD || '1234',
+  database: process.env.LISTING_DB_NAME || 'listing_site',
+  max: 5,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+};
+
+const LISTING_MIRRORS = {
+  upwork_campaigns: {
+    target: 'upwork_campaigns',
+    columns: ['id','category','name','upwork_search_input','scrape_job_urls','scrape_job_niche','gpt_account_id','time_coefficient','delay_between_repos','repos_per_hour','status','progress','results','created_at','updated_at'],
+  },
+  jobs_selected: {
+    target: 'jobs',
+    columns: ['id','campaign_id','title','description','niche','platform','tool','repo_url','upwork_job_url','viability','created_at','updated_at'],
+  },
+  product: {
+    target: 'products',
+    columns: ['id','campaign_id','title','description','content','topics','repo_url','status','created_at','updated_at'],
+  },
+  blog: {
+    target: 'blogs',
+    columns: ['id','campaign_id','title','content','topics','status','created_at','updated_at'],
+  },
+  services: {
+    target: 'services',
+    columns: ['id','campaign_id','title','description','content','topics','status','created_at','updated_at'],
+  },
+};
+
 const TABLES = `CREATE TABLE IF NOT EXISTS campaigns (
   id TEXT PRIMARY KEY, name TEXT, category TEXT,
   gpt_account_id TEXT, keywords TEXT, questions TEXT, apify_urls TEXT,
@@ -101,6 +135,7 @@ CREATE INDEX IF NOT EXISTS idx_services_campaign ON services(campaign_id);`;
 class Storage {
   constructor() {
     this.pool = null;
+    this.listingPool = null;
     this.connected = false;
     this._connectPromise = null;
   }
@@ -122,6 +157,54 @@ class Storage {
       }
     }
     return camel;
+  }
+
+  async _getListingPool() {
+    if (this.listingPool) return this.listingPool;
+    this.listingPool = new pg.Pool(LISTING_POOL_CONFIG);
+    this.listingPool.on('error', (err) => {
+      console.warn('Listing DB pool error:', err.message);
+    });
+    return this.listingPool;
+  }
+
+  async _mirrorToListing(sourceTable, row) {
+    const mapping = LISTING_MIRRORS[sourceTable];
+    if (!mapping || !row) return;
+
+    try {
+      const pool = await this._getListingPool();
+      const cols = mapping.columns;
+      const colSql = cols.join(', ');
+      const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+      const updates = cols
+        .filter(c => c !== 'id')
+        .map(c => `"${c}" = EXCLUDED."${c}"`)
+        .concat('synced_at = NOW()')
+        .join(', ');
+      const values = cols.map(c => this._dbVal(row[c]));
+
+      await pool.query(
+        `INSERT INTO ${mapping.target} (${colSql}, synced_at)
+         VALUES (${placeholders}, NOW())
+         ON CONFLICT (id) DO UPDATE SET ${updates}`,
+        values
+      );
+    } catch (error) {
+      console.warn(`Listing DB mirror skipped for ${sourceTable}: ${error.message}`);
+    }
+  }
+
+  async _deleteFromListing(sourceTable, id) {
+    const mapping = LISTING_MIRRORS[sourceTable];
+    if (!mapping || !id) return;
+
+    try {
+      const pool = await this._getListingPool();
+      await pool.query(`DELETE FROM ${mapping.target} WHERE id = $1`, [id]);
+    } catch (error) {
+      console.warn(`Listing DB delete skipped for ${sourceTable}: ${error.message}`);
+    }
   }
 
   async connect() {
@@ -201,6 +284,9 @@ class Storage {
           }
         }
       }
+
+      await client.query("ALTER TABLE gpt_accounts ADD COLUMN IF NOT EXISTS is_default BOOLEAN DEFAULT false");
+      await client.query("ALTER TABLE gpt_accounts ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'");
     } finally {
       client.release();
     }
@@ -454,6 +540,26 @@ class Storage {
     }
   }
 
+  async getPipelineSyncStatus() {
+    await this.ensureConnected();
+    try {
+      const { rows } = await this.pool.query(`
+        SELECT MAX(ts) AS last_source_update_at
+        FROM (
+          SELECT updated_at::timestamptz AS ts FROM upwork_campaigns WHERE updated_at IS NOT NULL
+          UNION ALL SELECT updated_at::timestamptz FROM product WHERE updated_at IS NOT NULL
+          UNION ALL SELECT updated_at::timestamptz FROM blog WHERE updated_at IS NOT NULL
+          UNION ALL SELECT updated_at::timestamptz FROM services WHERE updated_at IS NOT NULL
+          UNION ALL SELECT updated_at::timestamptz FROM jobs_selected WHERE updated_at IS NOT NULL
+        ) updates
+      `);
+      return this._maybeParse(rows[0] || { last_source_update_at: null });
+    } catch (error) {
+      console.error('Error fetching pipeline sync status:', error);
+      return { lastSourceUpdateAt: null };
+    }
+  }
+
   async getUpworkCampaign(id) {
     await this.ensureConnected();
     try {
@@ -498,6 +604,7 @@ class Storage {
       );
 
       if (rowCount === 0) throw new Error('Failed to create Upwork campaign');
+      await this._mirrorToListing('upwork_campaigns', campaign);
       return this._maybeParse(this._toCamel(campaign));
     } catch (error) {
       console.error('Error creating Upwork campaign:', error.message, error.detail, error.hint, error.where);
@@ -511,6 +618,8 @@ class Storage {
       updates.updatedAt = new Date().toISOString();
       const row = await this._update('upwork_campaigns', id, updates);
       if (!row) throw new Error('Upwork campaign not found');
+      await this._mirrorToListing('upwork_campaigns', row);
+      return this._maybeParse(row);
     } catch (error) {
       console.error('Error updating Upwork campaign:', error);
       throw error;
@@ -522,6 +631,7 @@ class Storage {
     try {
       await this.pool.query('DELETE FROM logs WHERE campaign_id = $1', [id]);
       await this.pool.query('DELETE FROM upwork_campaigns WHERE id = $1', [id]);
+      await this._deleteFromListing('upwork_campaigns', id);
     } catch (error) {
       console.error('Error deleting Upwork campaign:', error);
       throw error;
@@ -593,6 +703,7 @@ class Storage {
       );
 
       if (rowCount === 0) throw new Error('Failed to create scrape-jobs campaign');
+      await this._mirrorToListing('upwork_campaigns', campaign);
       return this._maybeParse(this._toCamel(campaign));
     } catch (error) {
       console.error('Error creating scrape-jobs campaign:', error);
@@ -606,6 +717,8 @@ class Storage {
       updates.updatedAt = new Date().toISOString();
       const row = await this._updateScoped('upwork_campaigns', id, updates, { category: 'scrape-jobs' });
       if (!row) throw new Error('Scrape-jobs campaign not found');
+      await this._mirrorToListing('upwork_campaigns', row);
+      return this._maybeParse(row);
     } catch (error) {
       console.error('Error updating scrape-jobs campaign:', error);
       throw error;
@@ -619,6 +732,7 @@ class Storage {
       const { rowCount } = await this.pool.query(
         "DELETE FROM upwork_campaigns WHERE id = $1 AND category = 'scrape-jobs'", [id]
       );
+      if (rowCount > 0) await this._deleteFromListing('upwork_campaigns', id);
       if (rowCount === 0) throw new Error('Scrape-jobs campaign not found');
     } catch (error) {
       console.error('Error deleting scrape-jobs campaign:', error);
@@ -897,6 +1011,7 @@ class Storage {
         [job.id, job.campaign_id, job.title, job.description, job.niche, job.platform,
          job.tool, job.repo_url, job.upwork_job_url, job.viability, job.created_at, job.updated_at]
       );
+      await this._mirrorToListing('jobs_selected', job);
       return job;
     } catch (error) {
       console.error('Error creating jobs selected:', error);
@@ -910,6 +1025,7 @@ class Storage {
       updates.updatedAt = new Date().toISOString();
       const row = await this._update('jobs_selected', id, updates);
       if (!row) throw new Error(`Jobs selected ${id} not found`);
+      await this._mirrorToListing('jobs_selected', row);
       return row;
     } catch (error) {
       console.error('Error updating jobs selected:', error);
@@ -921,6 +1037,7 @@ class Storage {
     await this.ensureConnected();
     try {
       const { rowCount } = await this.pool.query('DELETE FROM jobs_selected WHERE id = $1', [id]);
+      if (rowCount > 0) await this._deleteFromListing('jobs_selected', id);
       if (rowCount === 0) throw new Error(`Jobs selected ${id} not found`);
       return true;
     } catch (error) {
@@ -969,12 +1086,13 @@ class Storage {
     await this.ensureConnected();
     try {
       const now = new Date().toISOString();
-      if (data.campaignId && data.title) {
+      if (data.title) {
         const existing = await this.pool.query(
-          'SELECT * FROM product WHERE campaign_id = $1 AND title = $2 LIMIT 1',
-          [data.campaignId, data.title]
+          'SELECT * FROM product WHERE title = $1 LIMIT 1',
+          [data.title]
         );
         if (existing.rows.length > 0) {
+          await this._mirrorToListing('product', existing.rows[0]);
           return this._maybeParse(existing.rows[0]);
         }
       }
@@ -997,6 +1115,7 @@ class Storage {
          product.content, product.topics, product.repo_url, product.status,
          product.created_at, product.updated_at]
       );
+      await this._mirrorToListing('product', product);
       return product;
     } catch (error) {
       console.error('Error creating product:', error);
@@ -1010,6 +1129,7 @@ class Storage {
       updates.updatedAt = new Date().toISOString();
       const row = await this._update('product', id, updates);
       if (!row) throw new Error(`Product ${id} not found`);
+      await this._mirrorToListing('product', row);
       return this._maybeParse(row);
     } catch (error) {
       console.error('Error updating product:', error);
@@ -1021,6 +1141,7 @@ class Storage {
     await this.ensureConnected();
     try {
       const { rowCount } = await this.pool.query('DELETE FROM product WHERE id = $1', [id]);
+      if (rowCount > 0) await this._deleteFromListing('product', id);
       if (rowCount === 0) throw new Error(`Product ${id} not found`);
       return true;
     } catch (error) {
@@ -1069,12 +1190,13 @@ class Storage {
     await this.ensureConnected();
     try {
       const now = new Date().toISOString();
-      if (data.campaignId && data.title) {
+      if (data.title) {
         const existing = await this.pool.query(
-          'SELECT * FROM blog WHERE campaign_id = $1 AND title = $2 LIMIT 1',
-          [data.campaignId, data.title]
+          'SELECT * FROM blog WHERE title = $1 LIMIT 1',
+          [data.title]
         );
         if (existing.rows.length > 0) {
+          await this._mirrorToListing('blog', existing.rows[0]);
           return this._maybeParse(existing.rows[0]);
         }
       }
@@ -1094,6 +1216,7 @@ class Storage {
         [post.id, post.campaign_id, post.title, post.content,
          post.topics, post.status, post.created_at, post.updated_at]
       );
+      await this._mirrorToListing('blog', post);
       return post;
     } catch (error) {
       console.error('Error creating blog post:', error);
@@ -1107,6 +1230,7 @@ class Storage {
       updates.updatedAt = new Date().toISOString();
       const row = await this._update('blog', id, updates);
       if (!row) throw new Error(`Blog post ${id} not found`);
+      await this._mirrorToListing('blog', row);
       return this._maybeParse(row);
     } catch (error) {
       console.error('Error updating blog post:', error);
@@ -1118,6 +1242,7 @@ class Storage {
     await this.ensureConnected();
     try {
       const { rowCount } = await this.pool.query('DELETE FROM blog WHERE id = $1', [id]);
+      if (rowCount > 0) await this._deleteFromListing('blog', id);
       if (rowCount === 0) throw new Error(`Blog post ${id} not found`);
       return true;
     } catch (error) {
@@ -1166,13 +1291,13 @@ class Storage {
     await this.ensureConnected();
     try {
       const now = new Date().toISOString();
-      // Duplicate check: if same campaign + title exists, return it
-      if (data.campaignId && data.title) {
+      if (data.title) {
         const existing = await this.pool.query(
-          'SELECT * FROM services WHERE campaign_id = $1 AND title = $2 LIMIT 1',
-          [data.campaignId, data.title]
+          'SELECT * FROM services WHERE title = $1 LIMIT 1',
+          [data.title]
         );
         if (existing.rows.length > 0) {
+          await this._mirrorToListing('services', existing.rows[0]);
           return this._maybeParse(existing.rows[0]);
         }
       }
@@ -1193,6 +1318,7 @@ class Storage {
         [service.id, service.campaign_id, service.title, service.description,
          service.content, service.topics, service.status, service.created_at, service.updated_at]
       );
+      await this._mirrorToListing('services', service);
       return service;
     } catch (error) {
       console.error('Error creating service:', error);
@@ -1206,6 +1332,7 @@ class Storage {
       updates.updatedAt = new Date().toISOString();
       const row = await this._update('services', id, updates);
       if (!row) throw new Error(`Service ${id} not found`);
+      await this._mirrorToListing('services', row);
       return this._maybeParse(row);
     } catch (error) {
       console.error('Error updating service:', error);
@@ -1217,6 +1344,7 @@ class Storage {
     await this.ensureConnected();
     try {
       const { rowCount } = await this.pool.query('DELETE FROM services WHERE id = $1', [id]);
+      if (rowCount > 0) await this._deleteFromListing('services', id);
       if (rowCount === 0) throw new Error(`Service ${id} not found`);
       return true;
     } catch (error) {
@@ -1312,6 +1440,11 @@ class Storage {
     if (this.pool) {
       await this.pool.end();
       this.connected = false;
+      this.pool = null;
+    }
+    if (this.listingPool) {
+      await this.listingPool.end();
+      this.listingPool = null;
     }
   }
 }

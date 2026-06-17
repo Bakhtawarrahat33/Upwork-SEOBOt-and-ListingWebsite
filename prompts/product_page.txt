@@ -15,10 +15,5 @@ REQUIREMENTS:
 - content: Full product page content. Include overview, features, who it's for, tech stack, CTA in clean readable markdown. 300-500 words.
 - topics: Array of 6-10 SEO tags relevant to the product (lowercase, hyphenated).
 
-Respond with JSON containing these exact fields:
-{
-  "title": "product title here",
-  "description": "short description",
-  "content": "full product page content",
-  "topics": ["tag1", "tag2"]
-}
+Respond with one valid JSON object only. The object must contain these keys: title, description, content, topics.
+Every value must be original, job-specific content. Never output placeholder text, angle-bracket text, schema labels, or example wording.

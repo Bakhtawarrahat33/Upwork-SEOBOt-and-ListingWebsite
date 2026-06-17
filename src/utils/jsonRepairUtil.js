@@ -1,5 +1,106 @@
 import { jsonrepair } from 'jsonrepair';
 
+const VALID_PLATFORMS = new Set([
+  'Zapier',
+  'Make.com',
+  'GoHighLevel',
+  'HubSpot',
+  'Salesforce',
+  'Monday.com',
+  'Airtable',
+  'Notion',
+  'Shopify',
+  'WordPress',
+  'OpenAI API',
+  'Python',
+  'PowerShell',
+  'Microsoft Power Automate',
+  'Google Sheets',
+  'Kommo',
+  'Pipedrive',
+  'Bubble',
+  'Webflow',
+  'Telegram',
+  'WhatsApp',
+  'Slack',
+  'Discord',
+  'Other',
+  'None'
+]);
+
+const PLATFORM_ALIASES = new Map([
+  ['ghl', 'GoHighLevel'],
+  ['go high level', 'GoHighLevel'],
+  ['gohighlevel', 'GoHighLevel'],
+  ['highlevel', 'GoHighLevel'],
+  ['high level', 'GoHighLevel'],
+  ['make', 'Make.com'],
+  ['make.com', 'Make.com'],
+  ['integromat', 'Make.com'],
+  ['power automate', 'Microsoft Power Automate'],
+  ['microsoft power automate', 'Microsoft Power Automate'],
+  ['ms power automate', 'Microsoft Power Automate'],
+  ['google sheet', 'Google Sheets'],
+  ['google sheets', 'Google Sheets'],
+  ['g sheets', 'Google Sheets'],
+  ['openai', 'OpenAI API'],
+  ['openai api', 'OpenAI API'],
+  ['chatgpt', 'OpenAI API'],
+  ['wordpress', 'WordPress'],
+  ['word press', 'WordPress'],
+  ['monday', 'Monday.com'],
+  ['monday.com', 'Monday.com']
+]);
+
+const CONNECTOR_PLATFORMS = new Set([
+  'Zapier',
+  'Make.com',
+  'Microsoft Power Automate'
+]);
+
+const BUSINESS_PLATFORMS = new Set([
+  'GoHighLevel',
+  'HubSpot',
+  'Salesforce',
+  'Monday.com',
+  'Airtable',
+  'Notion',
+  'Shopify',
+  'WordPress',
+  'Google Sheets',
+  'Kommo',
+  'Pipedrive',
+  'Bubble',
+  'Webflow'
+]);
+
+function normalizePlatformValue(value) {
+  if (typeof value !== 'string') return 'None';
+
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'none') return 'None';
+
+  const alias = PLATFORM_ALIASES.get(trimmed.toLowerCase());
+  if (alias) return alias;
+
+  for (const platform of VALID_PLATFORMS) {
+    if (platform.toLowerCase() === trimmed.toLowerCase()) {
+      return platform;
+    }
+  }
+
+  return 'Other';
+}
+
+function normalizeToolValue(value) {
+  if (typeof value !== 'string') return 'None';
+
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === 'none') return 'None';
+
+  return PLATFORM_ALIASES.get(trimmed.toLowerCase()) || trimmed;
+}
+
 /**
  * Extract and repair JSON from GPT response text
  * Handles malformed JSON, missing quotes, trailing commas, etc.
@@ -182,6 +283,7 @@ export function normalizeJobFilterResponse(parsed) {
     open_source_viable: 'No',
     niche: 'None',
     platform: 'None',
+    platformDomain: normalizeToolValue(parsed.platformDomain || parsed.platform_domain || parsed['platform domain'] || 'None'),
     tool: 'None',
     reason: parsed.reason || null
   };
@@ -243,11 +345,7 @@ export function normalizeJobFilterResponse(parsed) {
     if (field in parsed) {
       const value = parsed[field];
       if (typeof value === 'string' && value.trim().length > 0) {
-        const normalized = value.trim();
-        // Don't accept "None" as a valid platform
-        if (normalized.toLowerCase() !== 'none') {
-          result.platform = normalized;
-        }
+        result.platform = normalizePlatformValue(value);
       }
       break;
     }
@@ -260,14 +358,19 @@ export function normalizeJobFilterResponse(parsed) {
     if (field in parsed) {
       const value = parsed[field];
       if (typeof value === 'string' && value.trim().length > 0) {
-        const normalized = value.trim();
-        // Don't accept "None" as a valid tool
-        if (normalized.toLowerCase() !== 'none') {
-          result.tool = normalized;
-        }
+        result.tool = normalizeToolValue(value);
       }
       break;
     }
+  }
+
+  // If GPT put the primary business app into tool and the connector into platform,
+  // preserve the business app as the platform and keep the connector as the tool.
+  const toolAsPlatform = normalizePlatformValue(result.tool);
+  if (CONNECTOR_PLATFORMS.has(result.platform) && BUSINESS_PLATFORMS.has(toolAsPlatform)) {
+    const connector = result.platform;
+    result.platform = toolAsPlatform;
+    result.tool = connector;
   }
   
   return result;

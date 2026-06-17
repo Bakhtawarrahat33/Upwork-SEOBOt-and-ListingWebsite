@@ -136,6 +136,15 @@ ipcMain.handle('upworkCampaigns:list', async () => {
   }
 });
 
+ipcMain.handle('pipeline:sync-status', async () => {
+  try {
+    return await storage.getPipelineSyncStatus();
+  } catch (error) {
+    console.error('Error getting pipeline sync status:', error);
+    throw error;
+  }
+});
+
 ipcMain.handle('upworkCampaigns:create', async (_event, payload) => {
   try {
     const campaign = await storage.createUpworkCampaign(payload);

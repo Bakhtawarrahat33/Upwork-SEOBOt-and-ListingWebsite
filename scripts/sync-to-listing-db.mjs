@@ -41,9 +41,11 @@ async function syncTable(srcPool, dstPool, mapping) {
   );
   const lastSyncedAt = wmRows.length > 0 ? wmRows[0].last_synced_at : new Date('1970-01-01');
 
-  // 2. Fetch new rows from source
+  const timestampColumn = columns.includes('updated_at') ? 'updated_at' : 'created_at';
+
+  // 2. Fetch new or changed rows from source
   const { rows: newRows } = await srcPool.query(
-    `SELECT ${cols} FROM ${source} WHERE created_at::timestamptz > $1 ORDER BY created_at`,
+    `SELECT ${cols} FROM ${source} WHERE ${timestampColumn}::timestamptz > $1 ORDER BY ${timestampColumn}`,
     [lastSyncedAt]
   );
 
@@ -60,6 +62,7 @@ async function syncTable(srcPool, dstPool, mapping) {
 
   // 3. Insert into target (upsert to handle re-runs)
   let inserted = 0;
+  const syncedRows = [];
   for (const row of newRows) {
     const values = columns.map(c => {
       let v = row[c] ?? null;
@@ -77,6 +80,7 @@ async function syncTable(srcPool, dstPool, mapping) {
         values
       );
       inserted++;
+      syncedRows.push(row);
     } catch (insertErr) {
       console.error(`  ⚠️  Failed to insert row ${row.id}: ${insertErr.message}`);
     }
@@ -84,9 +88,14 @@ async function syncTable(srcPool, dstPool, mapping) {
 
   // 4. Update watermark only if at least one row was inserted
   if (inserted > 0) {
+    const newestSyncedAt = syncedRows
+      .map(row => row[timestampColumn])
+      .filter(Boolean)
+      .sort((a, b) => new Date(b) - new Date(a))[0] || new Date().toISOString();
+
     await dstPool.query(
-      'UPDATE sync_watermarks SET last_synced_at = NOW() WHERE table_name = $1',
-      [source]
+      'UPDATE sync_watermarks SET last_synced_at = $2 WHERE table_name = $1',
+      [source, newestSyncedAt]
     );
   }
 

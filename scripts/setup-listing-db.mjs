@@ -92,6 +92,19 @@ async function createTables() {
     console.log('✅ Created upwork_campaigns table');
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS logs (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT,
+        level TEXT,
+        message TEXT,
+        timestamp BIGINT,
+        created_at TEXT
+      )
+    `);
+    await client.query('CREATE INDEX IF NOT EXISTS idx_logs_campaign ON logs(campaign_id, timestamp DESC)');
+    console.log('Created logs table');
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS sync_watermarks (
         table_name TEXT PRIMARY KEY,
         last_synced_at TIMESTAMPTZ NOT NULL DEFAULT '1970-01-01 00:00:00+00'

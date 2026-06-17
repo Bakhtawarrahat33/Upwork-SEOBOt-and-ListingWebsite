@@ -140,7 +140,7 @@ export default function PostPage() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-medium hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 transition shadow-sm"
+          className="w-full py-3 rounded-lg bg-gray-900 text-white font-medium hover:bg-gray-800 disabled:opacity-50 transition"
         >
           {loading ? (
             <span className="inline-flex items-center gap-2">

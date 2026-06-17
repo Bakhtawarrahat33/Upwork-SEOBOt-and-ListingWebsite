@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Upwork Campaign operations
   listUpworkCampaigns: () => ipcRenderer.invoke('upworkCampaigns:list'),
+  getPipelineSyncStatus: () => ipcRenderer.invoke('pipeline:sync-status'),
   createUpworkCampaign: (campaignData) => ipcRenderer.invoke('upworkCampaigns:create', campaignData),
   startUpworkCampaign: (id) => ipcRenderer.invoke('upworkCampaigns:start', { id }),
   stopUpworkCampaign: (id) => ipcRenderer.invoke('upworkCampaigns:stop', { id }),

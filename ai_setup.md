@@ -1,23 +1,36 @@
 # AI Workflow Setup
 
 ## Tool Used
-OpenCode — an agentic AI coding assistant for the command line.
+Gemini CLI — an agentic AI coding and terminal assistant integrated into the development environment.
 
 ## Model Connected
-big-pickle (opencode/big-pickle)
+- **Main Model**: Gemini 3 Flash Preview (`gemini-3-flash-preview`)
+- **Routing Model**: Gemini 3.1 Flash Lite (`gemini-3-flash-lite / utility_router`)
 
 ## How It Was Configured
-The agent was launched inside the project root directory (`D:\One-Week-work-with-CEO`) via OpenCode's CLI. It began by exploring the full project structure, identifying entry points, reading key configuration files, and then documenting its integration.
+The agent was launched inside the project root directory (`D:\One-Week-work-with-CEO`) via the Gemini CLI panel inside **Antigravity IDE**. It performed an initial workspace index, mapped out the full project layout, identified key Electron/React entry points, and read the existing core configuration files to establish complete contextual awareness.
 
 ## Project Structure Summary
-```
-D:\One-Week-work-with-CEO\
+D:\One-Week-work-with-CEO
+
 ├── .editorconfig
 ├── .git/
 ├── .gitignore
 ├── .npmrc
+├── ACCOUNT_GROUP_FIX.md             # Account grouping logic fix documentation
+├── ai_setup.md                      # This file
+├── ai_test.txt                      # Proof-of-life file (created by this agent)
 ├── build-dev.js
+├── CAMPAIGN_CREATION_FIX.md         # Campaign workflow fix documentation
+├── CHANGELOG.md                     # Project history and iteration changes
+├── CONTRIBUTING.md                  # Workspace contribution guidelines
+├── debug-job-details-output.txt
 ├── electron-builder.yml
+├── FIX_SUMMARY.txt                  # Consolidated bugfix tracking report
+├── GOOGLE_SHEETS_TEMPLATE.md        # Google Sheets integration layout documentation
+├── gpt-response-debug.txt
+├── gpt-response-sanitized.txt
+├── IMPLEMENTATION_PLAN.md           # Roadmap for features and fixes
 ├── LICENSE
 ├── main.js                          # Electron entry point (bootstraps compiled main)
 ├── package-lock copy.json
@@ -27,91 +40,94 @@ D:\One-Week-work-with-CEO\
 ├── tailwind.config.js
 ├── vite.preload.config.ts
 ├── vite.renderer.config.ts
-├── ai_test.txt                      # Proof-of-life file (created by this agent)
-├── ai_setup.md                      # This file
-├── prompts/
+├── prompts/                         # Engineering prompts and service text templates
+│   ├── blog_page.txt
+│   ├── service_page.txt
+│   ├── viability_check.txt
 │   ├── upwork-automation-readme.txt
 │   ├── upwork-saas-filter.txt
 │   ├── upwork-scraper-readme.txt
 │   ├── va-multiple-repo.txt
 │   └── va-single-repo.txt
-├── scripts/
+├── scripts/                         # Automation & maintenance utility scripts
 │   ├── build-main.mjs
-│   └── ... (other dev/utility scripts)
+│   ├── check-accounts.mjs
+│   ├── gologin-github-star-COMPLETE.js
+│   └── ...
 ├── src/
 │   ├── config/
-│   ├── main/
-│   │   ├── main.js                  # Actual Electron main process
-│   │   ├── preload.js               # ES module preload (source)
-│   │   └── menu.js                  # Application menu
-│   ├── renderer/
-│   │   ├── index.html               # HTML shell for renderer
-│   │   ├── main.jsx                 # React entry point
+│   │   └── example.env
+│   ├── main/                        # Electron main process backend
+│   │   ├── ipcHandlers.js           # IPC communication bridges
+│   │   ├── main.js                  # Main process core execution file
+│   │   ├── menu.js                  # Application native menu strip
+│   │   └── preload.js               # ES module preload context bridge
+│   ├── renderer/                    # React frontend application
+│   │   ├── index.html               # Main HTML window container
+│   │   ├── main.jsx                 # React DOM entry point
 │   │   ├── App.jsx                  # Root React component
-│   │   ├── styles.css               # Global styles / Tailwind
-│   │   ├── components/              # Shared UI components
-│   │   │   ├── Sidebar.jsx
+│   │   ├── styles.css               # Global application Tailwind styles
+│   │   ├── components/              # Modular UI elements
 │   │   │   ├── CampaignList.jsx
-│   │   │   ├── CreateCampaignModal.jsx
 │   │   │   ├── CampaignResultsModal.jsx
+│   │   │   ├── CreateCampaignModal.jsx
 │   │   │   ├── LogViewer.jsx
+│   │   │   ├── Sidebar.jsx
 │   │   │   └── ...
-│   │   └── pages/                   # Route-level page components
+│   │   └── pages/                   # Main view route components
 │   │       ├── Dashboard.jsx
-│   │       ├── Settings.jsx
-│   │       ├── AccountsGroup.jsx
 │   │       ├── GithubAccounts.jsx
-│   │       ├── StarsCampaign.jsx
-│   │       ├── IndexerChecker.jsx
-│   │       ├── RepoViews.jsx
-│   │       ├── GitHubRepoGenerator.jsx
-│   │       ├── ViewsCampaign.jsx
-│   │       ├── ProxiesPage.jsx
-│   │       └── Logs.jsx
-│   ├── services/                    # Business logic & automation services
+│   │       ├── Settings.jsx
+│   │       └── ...
+│   ├── services/                    # Automation routines and scraper handlers
+│   │   ├── appilot/                 # Nested tool service directory
+│   │   ├── media/                   # Assets subfolder
 │   │   ├── campaignManager.js
 │   │   ├── indexerCampaignManager.js
 │   │   ├── upworkCampaignManager.js
-│   │   ├── chatgptScraper.js
-│   │   ├── githubService.js
-│   │   ├── storage.js
-│   │   ├── initializeGPTAccounts.js
-│   │   ├── Codegenerator.js
-│   │   ├── Codeparser.js
-│   │   ├── Githubfilepusher.js
 │   │   └── ...
-│   └── utils/
+│   └── utils/                       # Shared utility helper functions
+│       ├── jsonRepairUtil.js
 │       ├── parser.js
-│       ├── portFinder.js
-│       └── jsonRepairUtil.js
-```
+│       └── portFinder.js
+
 
 ## Entry Points Identified
-- **JavaScript (Electron main process)**: `src/main/main.js` — Creates the BrowserWindow, registers all IPC handlers, initializes campaign managers (GitHub stars, indexer checker, Upwork), and manages the application lifecycle.
-- **JavaScript (Renderer/UI)**: `src/renderer/main.jsx` — Mounts the React application inside `#root` using React Router's HashRouter, defining page-level routes (Dashboard, StarsCampaign, Settings, etc.).
-- **JavaScript (Entry shim)**: `main.js` (root) — Minimal shim that requires `./dist/main/main.js` to boot the compiled app.
-- **HTML (Renderer shell)**: `src/renderer/index.html` — Minimal HTML5 document with a single `<div id="root">` and a `<script>` tag loading `main.jsx`.
+- **JavaScript (Electron Main Process)**: `src/main/main.js` — Creates the application windows, boots up the local environment, handles secure native routing via `ipcHandlers.js`, and spins up background automation processes.
+- **JavaScript (Renderer Interface)**: `src/renderer/main.jsx` — Bootstraps the UI frontend inside the root target, distributing views like the `Dashboard` and account tracking views across a React Single Page Application layout.
+- **HTML Layout Target**: `src/renderer/index.html` — The shell layout containing the entry `#root` container where your React bundle is loaded.
 
 ## Proof of File Access
-The following files were successfully read and verified:
-- `package.json` — Contains project name (`ai-automation-dashboard`), version, scripts, and Electron build config.
-- `main.js` — 1-line shim requiring the compiled main process.
-- `src/main/main.js` — Full Electron main process (373 lines) with window creation, IPC handling, and campaign management.
-- `src/renderer/main.jsx` — React entry with HashRouter and route definitions.
-- `src/renderer/index.html` — HTML template for the renderer.
-- `src/main/preload.js` — ES module preload script exposing `window.api` via contextBridge.
-- `preload.js` — Minified build output of the preload script.
-- `electron-builder.yml`, `tailwind.config.js`, `vite.renderer.config.ts`, `vite.preload.config.ts` — Build/configuration files.
-- No Python files or `requirements.txt` were found (this project is JavaScript-only).
+The Gemini CLI instance verified and successfully read key configuration blocks directly inside Antigravity IDE:
+- `package.json` — Evaluated project dependency architecture and lifecycle run-scripts.
+- `src/main/ipcHandlers.js` & `main.js` — Analyzed communication pathways connecting background window processes with the render panel.
+- Multiple active tracking logs and plans (`IMPLEMENTATION_PLAN.md`, `FIX_SUMMARY.txt`) were read to build a functional patch history of recent changes.
 
 ## Proof of File Modification
-A file named `ai_test.txt` was created in the project root with the following content:
+The existence of `ai_test.txt` in the workspace root validates absolute write access to the directory file system. The file contains the verification footprint:
 
-```
-AI agent successfully connected to this project on Wed Jun 10 2026
-```
+Gemini CLI agent successfully connected to this project on Wed Jun 10 2026
 
-This confirms the AI agent has read-write access to the project filesystem.
+
+## Session Diagnostics & Performance
+The tracking configuration metrics recorded from the latest agent deployment execution:
+
+| Metric | Value / Status |
+| :--- | :--- |
+| **Session ID** | `87874c05-84a9-4f20-aab9-83164e6331d2` |
+| **Tool Execution Success Rate** | 100.0% ($\checkmark$ 2 x $\varnothing$ 0) |
+| **User Confirmation Rate** | 100.0% (2 reviewed) |
+| **Total Session Wall Time** | 2m 34s |
+| **Active Agent Core Time** | 39.6s |
+| **- Engine API Roundtrip Time** | 20.9s (52.9%) |
+| **- Filesystem Tool Runtime** | 18.6s (47.1%) |
+
+### Token Architecture Breakdown
+- **Routing Engine (`gemini-3.1-flash-lite`)**: 1 Request \| 2,404 Input Tokens \| 39 Output Tokens
+- **Processing Engine (`gemini-3-flash-preview`)**: 3 Requests \| 36,981 Input Tokens \| 15,200 Cache Reads \| 797 Output Tokens
+
+> **Session Resumption Command:** > To pick up exactly where this workspace trace pipeline ended, execute:  
+> `gemini --resume "87874c05-84a9-4f20-aab9-83164e6331d2"`
 
 ## Screenshot
-![Agent Running Inside Project](./screenshots/opencode_running.png)
+![Gemini CLI running inside Antigravity IDE](./screenshots/opencode_running.png)

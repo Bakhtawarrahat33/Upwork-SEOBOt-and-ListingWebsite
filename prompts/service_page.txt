@@ -16,10 +16,5 @@ REQUIREMENTS:
 - content: Full service page in markdown. Include: description, what's included, process steps, pricing, FAQ. 300-500 words.
 - topics: Array of 6-8 SEO tags relevant to the service (lowercase, hyphenated)
 
-Respond with JSON containing these exact fields:
-{
-  "title": "service title here",
-  "description": "service description",
-  "content": "full service page content",
-  "topics": ["tag1", "tag2"]
-}
+Respond with one valid JSON object only. The object must contain these keys: title, description, content, topics.
+Every value must be original, job-specific content. Never output placeholder text, angle-bracket text, schema labels, or example wording.
