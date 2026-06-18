@@ -146,11 +146,11 @@ class UpworkJobService {
           console.log('[Python Output]:', chunk);
         });
         
-        // Collect stderr data
+        // Collect stderr data (Python scripts redirect print() to stderr so only JSON goes to stdout)
         pythonProcess.stderr.on('data', (data) => {
           const chunk = data.toString();
           errorBuffer += chunk;
-          console.error('[Python Error]:', chunk);
+          console.log('[Python Log]:', chunk);
         });
         
         // Handle process completion
@@ -240,7 +240,7 @@ class UpworkJobService {
         pythonProcess.stderr.on('data', (data) => {
           const chunk = data.toString();
           errorBuffer += chunk;
-          console.error('[Python Error]:', chunk);
+          console.log('[Python Log]:', chunk);
         });
         
         pythonProcess.on('close', (code) => {

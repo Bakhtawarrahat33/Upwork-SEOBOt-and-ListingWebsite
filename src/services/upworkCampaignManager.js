@@ -64,20 +64,56 @@ function getStandaloneChatGPTProfileDir(gptAccountId = 'default') {
   return profileDir;
 }
 
+function getFallbackChatGPTProfileDir(gptAccountId = 'default') {
+  const safeId = String(gptAccountId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const profileDir = path.join(process.cwd(), '.chatgpt-profiles', '_sessions', `${safeId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  fs.mkdirSync(profileDir, { recursive: true });
+  return profileDir;
+}
+
+async function launchPuppeteerWithProfileFallback(puppeteer, launchOptions, primaryProfileDir, fallbackProfileDir, logFn = console.warn) {
+  try {
+    return {
+      browser: await puppeteer.launch({ ...launchOptions, userDataDir: primaryProfileDir }),
+      profileDir: primaryProfileDir,
+      usedFallback: false
+    };
+  } catch (error) {
+    const message = error?.message || String(error);
+    logFn(`Primary browser profile failed to launch: ${message}`);
+    logFn(`Retrying with a fresh browser profile: ${fallbackProfileDir}`);
+    await sleep(1500);
+    return {
+      browser: await puppeteer.launch({ ...launchOptions, userDataDir: fallbackProfileDir }),
+      profileDir: fallbackProfileDir,
+      usedFallback: true
+    };
+  }
+}
+
 async function launchBrowser(cookies, gptAccountId = 'default') {
   console.log('   🔧 Launching Puppeteer browser...');
   const puppeteer = (await import('puppeteer')).default;
-  const browser = await puppeteer.launch({
+  const launchOptions = {
     protocolTimeout: 120000,
     headless: false,
-    userDataDir: getStandaloneChatGPTProfileDir(gptAccountId),
     defaultViewport: { width: 1280, height: 800 },
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-blink-features=AutomationControlled',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
     ],
-  });
+  };
+  const launched = await launchPuppeteerWithProfileFallback(
+    puppeteer,
+    launchOptions,
+    getStandaloneChatGPTProfileDir(gptAccountId),
+    getFallbackChatGPTProfileDir(gptAccountId),
+    (msg) => console.warn(`   ${msg}`)
+  );
+  const browser = launched.browser;
   const page = await browser.newPage();
   await page.setUserAgent(
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -1282,27 +1318,40 @@ class UpworkCampaignManager extends EventEmitter {
     return profileDir;
   }
 
+  getFallbackChatGPTProfileDir(gptAccountId = 'default') {
+    return getFallbackChatGPTProfileDir(gptAccountId);
+  }
+
   async launchChatGPTBrowser(puppeteer, gptAccountId) {
     const profileDir = this.getChatGPTProfileDir(gptAccountId);
-    const browser = await puppeteer.launch({
+    const fallbackProfileDir = this.getFallbackChatGPTProfileDir(gptAccountId);
+    const launchOptions = {
       protocolTimeout: 120000,
       headless: false,
-      userDataDir: profileDir,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
         '--disable-dev-shm-usage',
+        '--disable-gpu',
         '--disable-web-security',
         '--disable-features=IsolateOrigins,site-per-process'
       ],
       ignoreDefaultArgs: ['--enable-automation'],
       defaultViewport: { width: 1920, height: 1080 }
-    });
+    };
+    const launched = await launchPuppeteerWithProfileFallback(
+      puppeteer,
+      launchOptions,
+      profileDir,
+      fallbackProfileDir,
+      (msg) => console.warn(`[ChatGPT Browser] ${msg}`)
+    );
+    const browser = launched.browser;
 
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    return { browser, page, profileDir };
+    return { browser, page, profileDir: launched.profileDir };
   }
 
   async ensureChatGPTSession(page, campaignId, gptAccountId, timeoutMs = 600000) {
@@ -1866,21 +1915,37 @@ class UpworkCampaignManager extends EventEmitter {
               continue;
             }
             
-            // ====== NEW: DUPLICATE DETECTION CHECK ======
+            // ====== DUPLICATE DETECTION CHECK ======
             this.log(id, 'info', '🔍 Checking for duplicate jobs in database...');
             
+            // First check by Upwork job ID (exact, global, cross-campaign)
+            const jobId = job.id || job.ciphertext;
+            if (jobId) {
+              const idDuplicate = await storage.checkDuplicateByJobId(jobId);
+              if (idDuplicate) {
+                duplicatesSkipped++;
+                nonViable++;
+                this.updateProgress(id, processed, processed, viable, nonViable);
+                this.log(id, 'warning', `⚠️ DUPLICATE BY JOB ID - Skipping job`);
+                this.log(id, 'warning', `   Job ID: ${jobId}`);
+                this.log(id, 'info', `   Total duplicates skipped so far: ${duplicatesSkipped}`);
+                continue;
+              }
+            }
+            
+            // Fallback: check by title similarity
             const isDuplicate = await storage.checkJobDuplicate(
               job.title,
               job.description,
-              0.85 // 85% similarity threshold
+              0.85
             );
             
             if (isDuplicate) {
               duplicatesSkipped++;
-              nonViable++; // Count as non-viable for stats
+              nonViable++;
               this.updateProgress(id, processed, processed, viable, nonViable);
               
-              this.log(id, 'warning', `⚠️ DUPLICATE DETECTED - Skipping job`);
+              this.log(id, 'warning', `⚠️ DUPLICATE BY TITLE - Skipping job`);
               this.log(id, 'warning', `   Original job: "${isDuplicate.title}"`);
               this.log(id, 'warning', `   Processed on: ${new Date(isDuplicate.createdAt).toLocaleString()}`);
               this.log(id, 'warning', `   Campaign: ${isDuplicate.campaignId}`);
@@ -1889,7 +1954,7 @@ class UpworkCampaignManager extends EventEmitter {
               }
               this.log(id, 'info', `   Total duplicates skipped so far: ${duplicatesSkipped}`);
               
-              continue; // Skip to next job
+              continue;
             }
             
             this.log(id, 'success', `✅ No duplicate found - proceeding with job`);

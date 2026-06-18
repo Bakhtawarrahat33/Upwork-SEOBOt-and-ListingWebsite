@@ -806,6 +806,20 @@ class Storage {
     }
   }
 
+  async checkDuplicateByJobId(jobId) {
+    await this.ensureConnected();
+    try {
+      const { rows } = await this.pool.query(
+        'SELECT id FROM processed_jobs WHERE id = $1 LIMIT 1',
+        [jobId]
+      );
+      return rows.length > 0 ? rows[0] : null;
+    } catch (error) {
+      console.error('Error checking job ID duplicate:', error);
+      return null;
+    }
+  }
+
   async storeProcessedJob(jobData) {
     await this.ensureConnected();
     try {

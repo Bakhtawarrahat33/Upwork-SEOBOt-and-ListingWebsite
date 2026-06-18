@@ -7,9 +7,11 @@ const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || '1234',
   database: process.env.DB_NAME || 'listing_site',
-  max: 10,
+  max: 3,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  connectionTimeoutMillis: 10000,
+  query_timeout: 15000,
+  statement_timeout: 15000,
 });
 
 pool.on('error', (err) => {
@@ -39,15 +41,30 @@ async function tableExists(tableName: string) {
   return Boolean(rows[0]?.table_name);
 }
 
+async function safeRows<T = Record<string, unknown>>(label: string, query: string, params: unknown[] = []): Promise<T[]> {
+  try {
+    const { rows } = await pool.query(query, params);
+    return rows as T[];
+  } catch (err) {
+    console.error(`${label} error:`, err);
+    return [];
+  }
+}
+
+async function safeOne<T = Record<string, unknown>>(label: string, query: string, params: unknown[] = []): Promise<T | null> {
+  const rows = await safeRows<T>(label, query, params);
+  return rows[0] || null;
+}
+
 // Products (from listing_site.products)
 export async function getProducts() {
-  const { rows } = await pool.query("SELECT * FROM products WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
+  const rows = await safeRows('getProducts', "SELECT * FROM products WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
   return rows.map(toCamelRow);
 }
 
 export async function getProductById(id: string) {
-  const { rows } = await pool.query("SELECT * FROM products WHERE id = $1 AND COALESCE(status, 'published') = 'published'", [id]);
-  return rows.length ? toCamelRow(rows[0]) : null;
+  const row = await safeOne('getProductById', "SELECT * FROM products WHERE id = $1 AND COALESCE(status, 'published') = 'published'", [id]);
+  return row ? toCamelRow(row) : null;
 }
 
 export async function createProduct(data: { title: string; description: string; content: string; topics?: string[]; status?: string }) {
@@ -60,13 +77,13 @@ export async function createProduct(data: { title: string; description: string; 
 
 // Blogs (from listing_site.blogs)
 export async function getBlogs() {
-  const { rows } = await pool.query("SELECT * FROM blogs WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
+  const rows = await safeRows('getBlogs', "SELECT * FROM blogs WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
   return rows.map(toCamelRow);
 }
 
 export async function getBlogById(id: string) {
-  const { rows } = await pool.query("SELECT * FROM blogs WHERE id = $1 AND COALESCE(status, 'published') = 'published'", [id]);
-  return rows.length ? toCamelRow(rows[0]) : null;
+  const row = await safeOne('getBlogById', "SELECT * FROM blogs WHERE id = $1 AND COALESCE(status, 'published') = 'published'", [id]);
+  return row ? toCamelRow(row) : null;
 }
 
 export async function createBlog(data: { title: string; content: string; topics?: string[]; status?: string }) {
@@ -79,13 +96,13 @@ export async function createBlog(data: { title: string; content: string; topics?
 
 // Services (from listing_site.services)
 export async function getServices() {
-  const { rows } = await pool.query("SELECT * FROM services WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
+  const rows = await safeRows('getServices', "SELECT * FROM services WHERE COALESCE(status, 'published') = 'published' ORDER BY created_at DESC");
   return rows.map(toCamelRow);
 }
 
 export async function getServiceById(id: string) {
-  const { rows } = await pool.query("SELECT * FROM services WHERE id = $1 AND COALESCE(status, 'published') = 'published'", [id]);
-  return rows.length ? toCamelRow(rows[0]) : null;
+  const row = await safeOne('getServiceById', "SELECT * FROM services WHERE id = $1 AND COALESCE(status, 'published') = 'published'", [id]);
+  return row ? toCamelRow(row) : null;
 }
 
 export async function createService(data: { title: string; description: string; content: string; topics?: string[]; status?: string }) {
@@ -98,13 +115,13 @@ export async function createService(data: { title: string; description: string; 
 
 // Jobs (from listing_site.jobs)
 export async function getJobs() {
-  const { rows } = await pool.query('SELECT * FROM jobs ORDER BY created_at DESC');
+  const rows = await safeRows('getJobs', 'SELECT * FROM jobs ORDER BY created_at DESC');
   return rows.map(toCamelRow);
 }
 
 export async function getJobById(id: string) {
-  const { rows } = await pool.query('SELECT * FROM jobs WHERE id = $1', [id]);
-  return rows.length ? toCamelRow(rows[0]) : null;
+  const row = await safeOne('getJobById', 'SELECT * FROM jobs WHERE id = $1', [id]);
+  return row ? toCamelRow(row) : null;
 }
 
 export async function createJob(data: { title: string; description: string; niche?: string; platform?: string; tool?: string; upworkJobUrl?: string }) {
@@ -209,7 +226,7 @@ export async function getRecentLogs(_limit = 10) {
 
 // Sync audit log (for the listing site)
 export async function getSyncAuditLog(limit = 20) {
-  const { rows } = await pool.query(
+  const rows = await safeRows('getSyncAuditLog',
     'SELECT id, run_at, table_name, rows_synced, duration_ms, error FROM sync_audit_log ORDER BY id DESC LIMIT $1',
     [limit]
   );
