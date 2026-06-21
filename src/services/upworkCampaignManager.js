@@ -5,7 +5,9 @@ import { fileURLToPath } from 'url';
 import { storage } from './storage.js';
 import { upworkJobService } from './upworkJobService.js';
 import { extractAndRepairJSON, normalizeJobFilterResponse } from '../utils/jsonRepairUtil.js';
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+puppeteer.use(StealthPlugin());
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -141,13 +143,15 @@ async function launchBrowser(cookies, gptAccountId = 'default', accountName) {
   const launchOptions = {
     protocolTimeout: 300000,
     timeout: 60000,
-    headless: !showGPTBrowser,
+    headless: false,
     executablePath: installedChromePath,
     defaultViewport: { width: 1280, height: 800 },
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     args: [
       '--no-first-run',
       '--no-default-browser-check',
       '--window-position=0,0',
+      '--disable-blink-features=AutomationControlled',
     ],
   };
   const launched = await launchPuppeteerWithProfileFallback(
@@ -174,7 +178,7 @@ async function launchBrowser(cookies, gptAccountId = 'default', accountName) {
       console.log(`🍪 Setting ${cookieArray.length} cookies for GPT session`);
       await page.setCookie(...cookieArray);
       await new Promise(resolve => setTimeout(resolve, 3000));
-      await page.goto('https://chatgpt.com', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+      await page.goto('https://chatgpt.com', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => { });
       const status = await checkChatGPTLoggedInWithCloudflareRetry(page, (msg) => console.warn(`   ${msg}`));
       hasProfileSession = status === true;
     } else {
@@ -253,7 +257,7 @@ async function autoLoginChatGPT(page, email, password, logFn) {
 
   try {
     await openLoginPage();
-  } catch {}
+  } catch { }
 
   await new Promise(resolve => setTimeout(resolve, 3000));
 
@@ -261,12 +265,12 @@ async function autoLoginChatGPT(page, email, password, logFn) {
   if (hasInvalidState) {
     logFn('   OpenAI login state expired. Clearing the automation profile auth state and retrying...');
     const authCookies = await page.cookies('https://auth.openai.com', 'https://chatgpt.com').catch(() => []);
-    if (authCookies.length > 0) await page.deleteCookie(...authCookies).catch(() => {});
+    if (authCookies.length > 0) await page.deleteCookie(...authCookies).catch(() => { });
     await page.evaluate(() => {
       localStorage.clear();
       sessionStorage.clear();
-    }).catch(() => {});
-    await openLoginPage().catch(() => {});
+    }).catch(() => { });
+    await openLoginPage().catch(() => { });
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
 
@@ -300,12 +304,12 @@ async function autoLoginChatGPT(page, email, password, logFn) {
 
   let emailField = null;
   for (const sel of emailSelectors) {
-    try { emailField = await page.waitForSelector(sel, { timeout: 3000 }); if (emailField) break; } catch {}
+    try { emailField = await page.waitForSelector(sel, { timeout: 3000 }); if (emailField) break; } catch { }
   }
   if (!emailField) {
     for (const frame of page.frames()) {
       for (const selector of emailSelectors) {
-        try { emailField = await frame.$(selector); if (emailField) break; } catch {}
+        try { emailField = await frame.$(selector); if (emailField) break; } catch { }
       }
       if (emailField) break;
     }
@@ -324,9 +328,9 @@ async function autoLoginChatGPT(page, email, password, logFn) {
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   if (continueBtn) {
-    try { await continueBtn.click(); } catch { try { await page.click('button[type="submit"]'); } catch {} }
+    try { await continueBtn.click(); } catch { try { await page.click('button[type="submit"]'); } catch { } }
   } else {
-    try { await emailField.press('Enter'); } catch { try { await page.click('button[type="submit"]'); } catch {} }
+    try { await emailField.press('Enter'); } catch { try { await page.click('button[type="submit"]'); } catch { } }
   }
 
   await new Promise(resolve => setTimeout(resolve, 3000));
@@ -334,7 +338,7 @@ async function autoLoginChatGPT(page, email, password, logFn) {
   const passwordSelectors = ['input[name="password"]', 'input[type="password"]', '#password', 'input[placeholder*="password" i]', 'input[placeholder*="Password"]', 'input[autocomplete="current-password"]'];
   let passField = null;
   for (const sel of passwordSelectors) {
-    try { passField = await page.waitForSelector(sel, { timeout: 3000 }); if (passField) break; } catch {}
+    try { passField = await page.waitForSelector(sel, { timeout: 3000 }); if (passField) break; } catch { }
   }
   if (!passField) { logFn('   ⚠️ Could not find password field'); return false; }
 
@@ -345,9 +349,9 @@ async function autoLoginChatGPT(page, email, password, logFn) {
 
   const signInBtn = await findButtonByText('Sign in') || await findButtonByText('Log in') || await findButtonByText('Continue');
   if (signInBtn) {
-    try { await signInBtn.click(); } catch { try { await passField.press('Enter'); } catch {} }
+    try { await signInBtn.click(); } catch { try { await passField.press('Enter'); } catch { } }
   } else {
-    try { await passField.press('Enter'); } catch { try { await page.click('button[type="submit"]'); } catch {} }
+    try { await passField.press('Enter'); } catch { try { await page.click('button[type="submit"]'); } catch { } }
   }
 
   logFn('   ⏳ Waiting for ChatGPT to complete login...');
@@ -355,14 +359,14 @@ async function autoLoginChatGPT(page, email, password, logFn) {
     await new Promise(resolve => setTimeout(resolve, 2000));
     try {
       if (await isStandaloneChatGPTLoggedIn(page)) { logFn('   ✅ Automated ChatGPT login successful!'); return true; }
-    } catch {}
+    } catch { }
     try {
       const errMsg = await page.evaluate(() => {
         const text = document.body?.innerText || '';
         return /incorrect|invalid.*password|wrong password|try again/i.test(text) ? text.substring(0, 200) : '';
       });
       if (errMsg) { logFn(`   ❌ Login error: ${errMsg}`); return false; }
-    } catch {}
+    } catch { }
   }
   logFn('   ⚠️ Auto-login timed out');
   return false;
@@ -631,7 +635,7 @@ async function waitForResponseComplete(page, timeoutMs = 120000, logFn, previous
       return main.innerHTML.substring(0, 20000);
     });
     fs.writeFileSync(`gpt-debug-dom-${Date.now()}.html`, chatHtml);
-  } catch (e) {}
+  } catch (e) { }
   return latestResponseText;
 }
 
@@ -647,10 +651,10 @@ function fillPrompt(template, vars) {
 function parseProductResponse(text) {
   try {
     const result = extractAndRepairJSON(text, '[PRODUCT] ')
-    const title       = result.title       || result.PRODUCT_TITLE || 'Untitled Product'
-    const description = result.description || result.TAGLINE       || ''
-    const content     = result.content     || result.OVERVIEW      || ''
-    const topics      = Array.isArray(result.topics) ? result.topics : []
+    const title = result.title || result.PRODUCT_TITLE || 'Untitled Product'
+    const description = result.description || result.TAGLINE || ''
+    const content = result.content || result.OVERVIEW || ''
+    const topics = Array.isArray(result.topics) ? result.topics : []
     console.log(`✅ Product parsed: "${title}" (content: ${String(content).length} chars)`)
     return { title, description, content, topics, features: [], raw: result }
   } catch (err) {
@@ -662,13 +666,13 @@ function parseProductResponse(text) {
 function parseBlogResponse(text) {
   try {
     const result = extractAndRepairJSON(text, '[BLOG] ')
-    const title           = result.title            || result.BLOG_TITLE       || 'Untitled Blog Post'
-    const content         = result.content          || result.BLOG_CONTENT     || ''
+    const title = result.title || result.BLOG_TITLE || 'Untitled Blog Post'
+    const content = result.content || result.BLOG_CONTENT || ''
     const metaDescription = result.meta_description || result.META_DESCRIPTION || ''
-    const category        = result.category         || 'General'
-    const tags            = Array.isArray(result.tags)   ? result.tags   : []
-    const topics          = Array.isArray(result.topics) ? result.topics : []
-    const blogSlug        = result.slug             || result.BLOG_SLUG        || ''
+    const category = result.category || 'General'
+    const tags = Array.isArray(result.tags) ? result.tags : []
+    const topics = Array.isArray(result.topics) ? result.topics : []
+    const blogSlug = result.slug || result.BLOG_SLUG || ''
     console.log(`✅ Blog parsed: "${title}" (content: ${String(content).length} chars)`)
     return { title, content, metaDescription, category, tags, topics, blogSlug }
   } catch (err) {
@@ -680,11 +684,11 @@ function parseBlogResponse(text) {
 function parseServiceResponse(text) {
   try {
     const result = extractAndRepairJSON(text, '[SERVICE] ')
-    const title       = result.title       || result.SERVICE_TITLE || 'Untitled Service'
-    const description = result.description || result.TAGLINE       || ''
-    const content     = result.content     || result.OVERVIEW      || ''
-    const topics      = Array.isArray(result.topics) ? result.topics : []
-    const serviceSlug = result.slug        || result.SERVICE_SLUG  || ''
+    const title = result.title || result.SERVICE_TITLE || 'Untitled Service'
+    const description = result.description || result.TAGLINE || ''
+    const content = result.content || result.OVERVIEW || ''
+    const topics = Array.isArray(result.topics) ? result.topics : []
+    const serviceSlug = result.slug || result.SERVICE_SLUG || ''
     console.log(`✅ Service parsed: "${title}" (content: ${String(content).length} chars)`)
     return { title, description, content, topics, serviceSlug, deliverables: [] }
   } catch (err) {
@@ -757,7 +761,7 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, g
   try {
     const account = await storage.getGPTAccount(gptAccountId);
     if (account && account.name) accountName = account.name;
-  } catch {}
+  } catch { }
   const { browser, page } = reuseSession
     ? { browser: existingBrowser, page: existingPage }
     : await launchBrowser(cookies, gptAccountId, accountName);
@@ -938,9 +942,9 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, g
     if (!(result.product && result.blog && result.service)) {
       logFn('\nIncomplete content set generated. Rolling back partial content.');
       await Promise.all([
-        result.product ? storage.deleteProduct(result.product.id).catch(() => {}) : Promise.resolve(),
-        result.blog ? storage.deleteBlogPost(result.blog.id).catch(() => {}) : Promise.resolve(),
-        result.service ? storage.deleteService(result.service.id).catch(() => {}) : Promise.resolve(),
+        result.product ? storage.deleteProduct(result.product.id).catch(() => { }) : Promise.resolve(),
+        result.blog ? storage.deleteBlogPost(result.blog.id).catch(() => { }) : Promise.resolve(),
+        result.service ? storage.deleteService(result.service.id).catch(() => { }) : Promise.resolve(),
       ]);
       throw new Error('Incomplete content set: product, blog, and service are all required');
     }
@@ -1075,73 +1079,145 @@ class UpworkCampaignManager extends EventEmitter {
     // Profiles are per GPT account, not per campaign. Serializing on the account
     // prevents two campaigns from typing into the same ChatGPT session at once.
     return this._withExclusiveBrowser(`gpt:${campaign.gptAccountId || id}`, async () => {
-    // Create shared browser for both filter and content generation
-    let sharedBrowser = null;
-    let sharedPage = null;
-    let filterResult;
+      // Create shared browser for both filter and content generation
+      let sharedBrowser = null;
+      let sharedPage = null;
+      let filterResult;
 
-    try {
-      this.log(id, 'info', 'Launching shared ChatGPT session for filter + content generation...');
-      const launched = await this.launchChatGPTBrowser(
-        campaign.gptAccountId,
-        id
-      );
-      sharedBrowser = launched.browser;
-      sharedPage = launched.page;
-      this.activeBrowsers.set(id, sharedBrowser);
+      try {
+        this.log(id, 'info', 'Launching shared ChatGPT session for filter + content generation...');
+        const launched = await this.launchChatGPTBrowser(
+          campaign.gptAccountId,
+          id
+        );
+        sharedBrowser = launched.browser;
+        sharedPage = launched.page;
+        this.activeBrowsers.set(id, sharedBrowser);
 
-      // Navigate and set up session once
-      await this.navigateToChatGPT(sharedPage, id);
-      const profileHasSession = await this.checkChatGPTLoggedInWithRetry(sharedPage);
-      const sanitizedCookies = profileHasSession ? [] : this.sanitizeCookies(cookies);
-      if (profileHasSession) {
-        this.log(id, 'info', 'Using saved ChatGPT browser session.');
-      }
-      if (sanitizedCookies.length > 0) {
-        await sharedPage.setCookie(...sanitizedCookies);
+        // Navigate and set up session once
         await this.navigateToChatGPT(sharedPage, id);
-      }
-      sharedPage = await this.ensureChatGPTSession(sharedPage, id, campaign.gptAccountId);
+        const profileHasSession = await this.checkChatGPTLoggedInWithRetry(sharedPage);
+        const sanitizedCookies = profileHasSession ? [] : this.sanitizeCookies(cookies);
+        if (profileHasSession) {
+          this.log(id, 'info', 'Using saved ChatGPT browser session.');
+        }
+        if (sanitizedCookies.length > 0) {
+          await sharedPage.setCookie(...sanitizedCookies);
+          await this.navigateToChatGPT(sharedPage, id);
+        }
+        sharedPage = await this.ensureChatGPTSession(sharedPage, id, campaign.gptAccountId);
 
-      // Filter (no retry — uses existing browser for speed)
-      this.log(id, 'info', 'Checking job viability with GPT...');
-      // Diagnosis reference: SELECTOR_PROMPT_INPUT and SELECTOR_STOP_BUTTON
-      // in diagnosis.md. A stuck conversation is reset before the one retry.
-      filterResult = await this.retryWithBackoff(
-        () => this._filterJobWithGPTInternal(
-          jobForFilter, cookies, id, campaign.gptAccountId, sharedPage, sharedBrowser
-        ),
-        {
-          maxRetries: 1,
-          baseDelay: 3000,
-          shouldRetry: (error) => !/cloudflare|challenge page/i.test(error?.message || ''),
-          onRetry: async (attempt, delay, error) => {
-            this.log(id, 'warning', `GPT viability retry ${attempt}/1 after ${delay}ms: ${error.message}`);
-            await this.startNewChat(sharedPage, (message) => this.log(id, 'info', message));
+        // Filter (no retry — uses existing browser for speed)
+        this.log(id, 'info', 'Checking job viability with GPT...');
+        // Diagnosis reference: SELECTOR_PROMPT_INPUT and SELECTOR_STOP_BUTTON
+        // in diagnosis.md. A stuck conversation is reset before the one retry.
+        filterResult = await this.retryWithBackoff(
+          () => this._filterJobWithGPTInternal(
+            jobForFilter, cookies, id, campaign.gptAccountId, sharedPage, sharedBrowser
+          ),
+          {
+            maxRetries: 1,
+            baseDelay: 3000,
+            shouldRetry: (error) => !/cloudflare|challenge page/i.test(error?.message || ''),
+            onRetry: async (attempt, delay, error) => {
+              this.log(id, 'warning', `GPT viability retry ${attempt}/1 after ${delay}ms: ${error.message}`);
+              await this.startNewChat(sharedPage, (message) => this.log(id, 'info', message));
+            }
+          }
+        );
+      } catch (error) {
+        this.log(id, 'error', `GPT viability check failed: ${error.message}`);
+        // B: Auth recovery — try refreshing cookies on auth errors
+        if (this.isChatGPTAuthError(error)) {
+          try {
+            this.log(id, 'warning', 'Auth error during filter — refreshing GPT session...');
+            await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
+            cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+          } catch (refreshError) {
+            this.log(id, 'error', `Cookie refresh failed: ${refreshError.message}`);
           }
         }
-      );
-    } catch (error) {
-      this.log(id, 'error', `GPT viability check failed: ${error.message}`);
-      // B: Auth recovery — try refreshing cookies on auth errors
-      if (this.isChatGPTAuthError(error)) {
-        try {
-          this.log(id, 'warning', 'Auth error during filter — refreshing GPT session...');
-          await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
-          cookies = await this.getGPTCookies(campaign.gptAccountId, id);
-        } catch (refreshError) {
-          this.log(id, 'error', `Cookie refresh failed: ${refreshError.message}`);
+        if (sharedBrowser) {
+          await sharedBrowser.close().catch(() => { });
+          this.activeBrowsers.delete(id);
+        }
+        return { status: 'error', error: error.message, job_id: jobData.id, title };
+      }
+
+      if (!filterResult.viable) {
+        this.log(id, 'warning', `Job rejected by GPT: ${filterResult.reason || 'Not viable'}`);
+        await storage.storeProcessedJob({
+          id: jobId,
+          title: jobData.title,
+          description: jobData.description || '',
+          campaignId: id,
+          niche: filterResult.niche || 'Other',
+          platform: filterResult.platform || 'None',
+          tool: filterResult.tool || 'None',
+          repoUrl: '',
+          upworkJobUrl: jobData.url || '',
+          viable: false,
+          rejectionReason: filterResult.reason || 'GPT filter rejected',
+        }).catch((error) => this.log(id, 'warning', `Failed to store rejected job: ${error.message}`));
+        if (sharedBrowser) {
+          await sharedBrowser.close().catch(() => { });
+          this.activeBrowsers.delete(id);
+        }
+        return { status: 'rejected', job_id: jobData.id, title, reason: filterResult.reason || 'Not viable' };
+      }
+
+      this.log(id, 'success', `Job viable: ${filterResult.platform || 'unknown platform'} / ${filterResult.tool || 'unknown tool'}`);
+
+      let contentResult;
+      try {
+        contentResult = await generateForJob({
+          jobTitle: jobData.title,
+          jobDescription,
+          cookies,
+          campaignId: id,
+          gptAccountId: campaign.gptAccountId,
+          logFn: (msg) => this.log(id, 'info', msg),
+          shouldAbort: () => false,
+          jobSkills: Array.isArray(jobData.skills) ? jobData.skills.join(', ') : (jobData.skills || 'Not specified'),
+          jobBudget: jobData.budget || 'Not specified',
+          existingBrowser: sharedBrowser,
+          existingPage: sharedPage,
+          sendPrompt: (prompt) => this.sendPromptAndReadGPTResponse(sharedPage, prompt, id),
+        });
+      } catch (error) {
+        this.log(id, 'error', `Content generation failed: ${error.message}`);
+        // B: Auth recovery — try refreshing cookies on auth errors
+        if (this.isChatGPTAuthError(error)) {
+          try {
+            this.log(id, 'warning', 'Auth error during content gen — refreshing GPT session...');
+            await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
+            cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+          } catch (refreshError) {
+            this.log(id, 'error', `Cookie refresh failed: ${refreshError.message}`);
+          }
+        }
+        if (sharedBrowser) {
+          await sharedBrowser.close().catch(() => { });
+          this.activeBrowsers.delete(id);
+        }
+        return { status: 'error', error: error.message, job_id: jobData.id, title };
+      } finally {
+        if (sharedBrowser) {
+          await sharedBrowser.close().catch(() => { });
+          this.activeBrowsers.delete(id);
         }
       }
-      if (sharedBrowser) {
-        await sharedBrowser.close().catch(() => {});
-        this.activeBrowsers.delete(id);
-      }
-      return { status: 'error', error: error.message, job_id: jobData.id, title };
-    }
 
-    if (!filterResult.viable) {
-      this.log(id, 'warning', `Job rejected by GPT: ${filterResult.reason || 'Not viable'}`);
+      await storage.createJobsSelected({
+        campaignId: id,
+        title: jobData.title,
+        description: jobDescription,
+        niche: filterResult.niche || 'Other',
+        platform: filterResult.platform || 'None',
+        tool: filterResult.tool || 'None',
+        upworkJobUrl: jobData.url || '',
+      }).catch((error) => this.log(id, 'warning', `Failed to store selected job: ${error.message}`));
+
       await storage.storeProcessedJob({
         id: jobId,
         title: jobData.title,
@@ -1152,98 +1228,26 @@ class UpworkCampaignManager extends EventEmitter {
         tool: filterResult.tool || 'None',
         repoUrl: '',
         upworkJobUrl: jobData.url || '',
-        viable: false,
-        rejectionReason: filterResult.reason || 'GPT filter rejected',
-      }).catch((error) => this.log(id, 'warning', `Failed to store rejected job: ${error.message}`));
-      if (sharedBrowser) {
-        await sharedBrowser.close().catch(() => {});
-        this.activeBrowsers.delete(id);
-      }
-      return { status: 'rejected', job_id: jobData.id, title, reason: filterResult.reason || 'Not viable' };
-    }
-
-    this.log(id, 'success', `Job viable: ${filterResult.platform || 'unknown platform'} / ${filterResult.tool || 'unknown tool'}`);
-
-    let contentResult;
-    try {
-      contentResult = await generateForJob({
-        jobTitle: jobData.title,
-        jobDescription,
-        cookies,
-        campaignId: id,
-        gptAccountId: campaign.gptAccountId,
-        logFn: (msg) => this.log(id, 'info', msg),
-        shouldAbort: () => false,
-        jobSkills: Array.isArray(jobData.skills) ? jobData.skills.join(', ') : (jobData.skills || 'Not specified'),
-        jobBudget: jobData.budget || 'Not specified',
-        existingBrowser: sharedBrowser,
-        existingPage: sharedPage,
-        sendPrompt: (prompt) => this.sendPromptAndReadGPTResponse(sharedPage, prompt, id),
-      });
-    } catch (error) {
-      this.log(id, 'error', `Content generation failed: ${error.message}`);
-      // B: Auth recovery — try refreshing cookies on auth errors
-      if (this.isChatGPTAuthError(error)) {
-        try {
-          this.log(id, 'warning', 'Auth error during content gen — refreshing GPT session...');
-          await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
-          cookies = await this.getGPTCookies(campaign.gptAccountId, id);
-        } catch (refreshError) {
-          this.log(id, 'error', `Cookie refresh failed: ${refreshError.message}`);
-        }
-      }
-      if (sharedBrowser) {
-        await sharedBrowser.close().catch(() => {});
-        this.activeBrowsers.delete(id);
-      }
-      return { status: 'error', error: error.message, job_id: jobData.id, title };
-    } finally {
-      if (sharedBrowser) {
-        await sharedBrowser.close().catch(() => {});
-        this.activeBrowsers.delete(id);
-      }
-    }
-
-    await storage.createJobsSelected({
-      campaignId: id,
-      title: jobData.title,
-      description: jobDescription,
-      niche: filterResult.niche || 'Other',
-      platform: filterResult.platform || 'None',
-      tool: filterResult.tool || 'None',
-      upworkJobUrl: jobData.url || '',
-    }).catch((error) => this.log(id, 'warning', `Failed to store selected job: ${error.message}`));
-
-    await storage.storeProcessedJob({
-      id: jobId,
-      title: jobData.title,
-      description: jobData.description || '',
-      campaignId: id,
-      niche: filterResult.niche || 'Other',
-      platform: filterResult.platform || 'None',
-      tool: filterResult.tool || 'None',
-      repoUrl: '',
-      upworkJobUrl: jobData.url || '',
-      viable: true,
-    }).catch((error) => this.log(id, 'warning', `Failed to store processed job: ${error.message}`));
-
-    return {
-      status: 'success',
-      job_id: jobData.id,
-      campaign_id: id,
-      title,
-      viability: {
         viable: true,
-        niche: filterResult.niche,
-        platform: filterResult.platform,
-        tool: filterResult.tool,
-      },
-      content: {
-        product: { id: contentResult.product.id, title: contentResult.productParsed.title },
-        blog: { id: contentResult.blog.id, title: contentResult.blogParsed.title },
-        service: { id: contentResult.service.id, title: contentResult.serviceParsed.title },
-      },
-    };
+      }).catch((error) => this.log(id, 'warning', `Failed to store processed job: ${error.message}`));
+
+      return {
+        status: 'success',
+        job_id: jobData.id,
+        campaign_id: id,
+        title,
+        viability: {
+          viable: true,
+          niche: filterResult.niche,
+          platform: filterResult.platform,
+          tool: filterResult.tool,
+        },
+        content: {
+          product: { id: contentResult.product.id, title: contentResult.productParsed.title },
+          blog: { id: contentResult.blog.id, title: contentResult.blogParsed.title },
+          service: { id: contentResult.service.id, title: contentResult.serviceParsed.title },
+        },
+      };
     }); // end _withExclusiveBrowser
   }
 
@@ -1287,7 +1291,7 @@ class UpworkCampaignManager extends EventEmitter {
     const maxRetries = options.maxRetries || 2;
     const baseDelay = options.baseDelay || 2000;
     const maxDelay = options.maxDelay || 20000;
-    const onRetry = options.onRetry || (() => {});
+    const onRetry = options.onRetry || (() => { });
     const shouldRetry = options.shouldRetry || (() => true);
 
     let lastError;
@@ -1360,7 +1364,7 @@ class UpworkCampaignManager extends EventEmitter {
       else if (typeof createdDateTime === 'string') {
         // Try ISO format first
         jobDate = new Date(createdDateTime);
-        
+
         // If invalid, try parsing as timestamp
         if (isNaN(jobDate.getTime())) {
           const timestamp = parseFloat(createdDateTime);
@@ -1377,7 +1381,7 @@ class UpworkCampaignManager extends EventEmitter {
       // Calculate time difference in minutes
       const diffMs = now - jobDate;
       const diffMinutes = diffMs / (1000 * 60);
-      
+
       return diffMinutes <= minutes;
 
     } catch (error) {
@@ -1431,7 +1435,7 @@ class UpworkCampaignManager extends EventEmitter {
     const evt = { campaignId, level, message, timestamp: Date.now() };
     storage.appendLog(campaignId, evt);
     this.emit('log', evt);
-    
+
     const emoji = {
       info: '[info]',
       success: '[success]',
@@ -1482,11 +1486,11 @@ class UpworkCampaignManager extends EventEmitter {
 
   async clearChatGPTAuthState(page) {
     const cookies = await page.cookies('https://chatgpt.com', 'https://auth.openai.com').catch(() => []);
-    if (cookies.length > 0) await page.deleteCookie(...cookies).catch(() => {});
+    if (cookies.length > 0) await page.deleteCookie(...cookies).catch(() => { });
     await page.evaluate(() => {
       localStorage.clear();
       sessionStorage.clear();
-    }).catch(() => {});
+    }).catch(() => { });
   }
 
   async navigateToChatGPT(page, campaignId) {
@@ -1502,17 +1506,17 @@ class UpworkCampaignManager extends EventEmitter {
     }
 
     // Wait for SPA to settle and check for stale session
-    await page.waitForFunction(() => document.body && document.readyState !== 'loading', { timeout: 30000 }).catch(() => {});
+    await page.waitForFunction(() => document.body && document.readyState !== 'loading', { timeout: 30000 }).catch(() => { });
     await new Promise(resolve => setTimeout(resolve, 5000));
 
     if (await this.hasInvalidOpenAIState(page)) {
       this.log(campaignId, 'warning', 'Stale OpenAI session detected. Clearing browser auth state and redirecting to login.');
       await this.clearChatGPTAuthState(page);
-      await page.goto('https://chatgpt.com/auth/login', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+      await page.goto('https://chatgpt.com/auth/login', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => { });
       await new Promise(resolve => setTimeout(resolve, 3000));
     }
 
-    await page.waitForFunction(() => document.body && document.readyState !== 'loading', { timeout: 30000 }).catch(() => {});
+    await page.waitForFunction(() => document.body && document.readyState !== 'loading', { timeout: 30000 }).catch(() => { });
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
 
@@ -1566,7 +1570,7 @@ class UpworkCampaignManager extends EventEmitter {
       Array.from(document.querySelectorAll('button')).some((element) => (
         /^clear chat$/i.test((element.textContent || '').trim()) && element.offsetParent !== null
       ))
-    ), { timeout: 5000 }).catch(() => {});
+    ), { timeout: 5000 }).catch(() => { });
     const cleared = await page.evaluate(() => {
       const buttons = Array.from(document.querySelectorAll('button'));
       const confirm = buttons.find((element) => /^clear chat$/i.test((element.textContent || '').trim()));
@@ -1583,7 +1587,7 @@ class UpworkCampaignManager extends EventEmitter {
         return rect.width > 0 && rect.height > 0;
       });
       return composer && !(composer.value || composer.textContent || composer.innerText || '').trim();
-    }, { timeout: 15000 }, selector).catch(() => {});
+    }, { timeout: 15000 }, selector).catch(() => { });
   }
 
   /**
@@ -1601,7 +1605,7 @@ class UpworkCampaignManager extends EventEmitter {
 
     // Wait a moment for the text to be processed
     await new Promise(resolve => setTimeout(resolve, 1000));
-    
+
     // Find and click send button
     logFn(`📤 Sending message...`);
     const sendButtonSelector = [
@@ -1612,7 +1616,7 @@ class UpworkCampaignManager extends EventEmitter {
       'button svg[aria-label*="Send"]',
       'button.absolute.bottom-3',
     ].join(', ');
-    
+
     try {
       await page.waitForFunction((selector) => {
         return Array.from(document.querySelectorAll(selector)).some((button) => {
@@ -1635,10 +1639,10 @@ class UpworkCampaignManager extends EventEmitter {
     } catch (e) {
       // Fallback: press Enter
       logFn(`⚠️ Send button not found, using Enter key...`);
-      await this.focusChatGPTComposer(page).catch(() => {});
+      await this.focusChatGPTComposer(page).catch(() => { });
       await page.keyboard.press('Enter');
     }
-    
+
     logFn(`✅ Message sent`);
     const submitted = await page.waitForFunction((previousCount) => (
       document.querySelectorAll('[data-message-author-role="user"]').length > previousCount
@@ -1692,7 +1696,7 @@ class UpworkCampaignManager extends EventEmitter {
           el.textContent = text;
         }
         el.dispatchEvent(new Event('input', { bubbles: true }));
-        
+
         const inputEvent = new InputEvent('input', {
           bubbles: true,
           cancelable: true,
@@ -1731,7 +1735,7 @@ class UpworkCampaignManager extends EventEmitter {
         await page.evaluate(() => {
           const stopButton = document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop" i]');
           stopButton?.click();
-        }).catch(() => {});
+        }).catch(() => { });
         throw new Error(`GPT response timed out after ${Math.round(opts.overallTimeoutMs / 1000)}s without a usable reply.`);
       }
 
@@ -1846,7 +1850,7 @@ class UpworkCampaignManager extends EventEmitter {
       if (state.isGenerating && state.length <= opts.minLength && elapsed > opts.initialResponseTimeoutMs) {
         await page.evaluate(() => {
           document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop" i]')?.click();
-        }).catch(() => {});
+        }).catch(() => { });
         throw new Error(`GPT generation started but produced no text after ${Math.round(opts.initialResponseTimeoutMs / 1000)}s.`);
       }
 
@@ -1863,19 +1867,19 @@ class UpworkCampaignManager extends EventEmitter {
             });
             fs.writeFileSync(`gpt-debug-dom-${Date.now()}.html`, chatHtml);
             logFn('📸 Screenshot + DOM saved for debugging');
-          } catch (e) {}
+          } catch (e) { }
           logFn('⚠️ Nudging with Enter once...');
           await page.keyboard.press('Enter');
           resentOnce = true;
           lastChangeTs = Date.now();
           continue;
-        } catch {}
+        } catch { }
       }
 
       // Keep page scrolled to bottom to avoid lazy rendering issues
       try {
         await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      } catch {}
+      } catch { }
     }
   }
 
@@ -1923,14 +1927,14 @@ class UpworkCampaignManager extends EventEmitter {
       const newMessages = messages.slice(baseline);
       if (newMessages.length > 0) {
         const lastMessage = newMessages[newMessages.length - 1];
-        
+
         // Remove copy buttons
         const clone = lastMessage.cloneNode(true);
         clone.querySelectorAll('button, [class*="copy"], [aria-label*="Copy"]').forEach(el => el.remove());
-        
+
         // Reconstruct markdown with code fences
         let fullText = '';
-        
+
         // Find all code blocks and reconstruct with fences
         const codeBlocks = clone.querySelectorAll('pre');
         if (codeBlocks.length > 0) {
@@ -1940,16 +1944,16 @@ class UpworkCampaignManager extends EventEmitter {
             NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
             null
           );
-          
+
           let node;
           let lastProcessedPre = null;
-          
+
           while (node = walker.nextNode()) {
             // Skip if already processed as part of a pre block
             if (lastProcessedPre && lastProcessedPre.contains(node)) {
               continue;
             }
-            
+
             if (node.nodeName === 'PRE') {
               lastProcessedPre = node;
               const code = node.querySelector('code');
@@ -1957,7 +1961,7 @@ class UpworkCampaignManager extends EventEmitter {
                 // Get language from class (e.g., "language-pgsql")
                 const langClass = code.className.match(/language-(\w+)/);
                 const lang = langClass ? langClass[1] : '';
-                
+
                 // Reconstruct code fence
                 fullText += `\n\`\`\`${lang}\n${code.textContent}\n\`\`\`\n`;
               }
@@ -1977,10 +1981,10 @@ class UpworkCampaignManager extends EventEmitter {
               }
             }
           }
-          
+
           return fullText.replace(/Copy code/gi, '').replace(/\n{3,}/g, '\n\n').trim();
         }
-        
+
         // Fallback to textContent if no code blocks
         return lastMessage.textContent || '';
       }
@@ -2031,7 +2035,7 @@ class UpworkCampaignManager extends EventEmitter {
   sanitizeCookies(cookies) {
     const normalized = this.normalizeCookies(cookies);
     if (normalized.length === 0) return [];
-    
+
     return normalized.map(c => {
       try {
         const out = {
@@ -2060,7 +2064,7 @@ class UpworkCampaignManager extends EventEmitter {
       const text = document.body?.innerText || '';
 
       const isCloudflareChallenge =
-      /checking your browser|verify you are human|cloudflare|ray id|just a moment/i.test(`${document.title || ''}\n${text}`) ||
+        /checking your browser|verify you are human|cloudflare|ray id|just a moment/i.test(`${document.title || ''}\n${text}`) ||
         !!document.querySelector('#challenge-form, .cf-browser-verification, [class*="cf-"]');
       if (isCloudflareChallenge) return 'CLOUDFLARE';
 
@@ -2116,7 +2120,7 @@ class UpworkCampaignManager extends EventEmitter {
           await candidate.bringToFront();
           return candidate;
         }
-      } catch {}
+      } catch { }
     }
     return null;
   }
@@ -2140,12 +2144,14 @@ class UpworkCampaignManager extends EventEmitter {
     const launchOptions = {
       protocolTimeout: 300000,
       timeout: 60000,
-      headless: !showGPTBrowser,
+      headless: false,
       executablePath: installedChromePath,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
       args: [
         '--no-first-run',
         '--no-default-browser-check',
         '--window-position=0,0',
+        '--disable-blink-features=AutomationControlled',
       ],
       defaultViewport: { width: 1920, height: 1080 }
     };
@@ -2186,7 +2192,7 @@ class UpworkCampaignManager extends EventEmitter {
     }
 
     // Navigate to chatgpt.com/auth/login so the user sees the login form, not a stale error page
-    await page.goto('https://chatgpt.com/auth/login', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    await page.goto('https://chatgpt.com/auth/login', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => { });
     await new Promise(resolve => setTimeout(resolve, 3000));
 
     const profileDir = this.getChatGPTProfileDir(gptAccountId);
@@ -2211,7 +2217,7 @@ class UpworkCampaignManager extends EventEmitter {
           this.log(campaignId, 'success', 'ChatGPT login detected. Continuing automation.');
           return page;
         }
-      } catch {}
+      } catch { }
     }
 
     if (gptAccountId) this.markGptAccountInvalid(gptAccountId);
@@ -2234,10 +2240,11 @@ class UpworkCampaignManager extends EventEmitter {
 
     const launched = await launchPuppeteerWithProfileFallback(puppeteer, {
       protocolTimeout: 60000,
-      headless: !showGPTBrowser,
+      headless: false,
       executablePath: installedChromePath,
       defaultViewport: { width: 1280, height: 800 },
-      args: ['--no-first-run', '--no-default-browser-check'],
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      args: ['--no-first-run', '--no-default-browser-check', '--disable-blink-features=AutomationControlled'],
     }, profileDir, fallbackProfileDir, (msg) => this.log(campaignId, 'warning', msg));
 
     const browser = launched.browser;
@@ -2253,7 +2260,7 @@ class UpworkCampaignManager extends EventEmitter {
       await this.persistChatGPTCookies(page, gptAccountId, campaignId);
       this.log(campaignId, 'success', 'GPT session refreshed via auto-login.');
     } finally {
-      await browser.close().catch(() => {});
+      await browser.close().catch(() => { });
     }
   }
 
@@ -2401,7 +2408,7 @@ class UpworkCampaignManager extends EventEmitter {
         } catch (promptError) {
           const isNavError = /execution context was destroyed|navigation|redirected to login/i.test(promptError?.message || '');
           if (isNavError && attempt < MAX_PROMPT_RETRIES) {
-            this.log(campaignId, 'warning', `🔄 Prompt retry ${attempt}/${MAX_PROMPT_RETRIES-1} after navigation error: ${promptError.message}`);
+            this.log(campaignId, 'warning', `🔄 Prompt retry ${attempt}/${MAX_PROMPT_RETRIES - 1} after navigation error: ${promptError.message}`);
             await this.navigateToChatGPT(page, campaignId);
             page = await this.ensureChatGPTSession(page, campaignId, gptAccountId);
             await this.waitForChatGPTComposer(page);
@@ -2510,30 +2517,30 @@ class UpworkCampaignManager extends EventEmitter {
    */
   async generateReadmeForJob(jobDetails, niche, platform, tool, cookies, campaignId, gptAccountId = 'default') {
     this.log(campaignId, 'info', `📝 Generating ${niche} README for: ${jobDetails.title}`);
-    
+
     let browser;
-    
+
     try {
       // Choose appropriate prompt
-      const promptTemplate = niche === 'Scraping' 
-        ? this.prompts.scraperReadme 
+      const promptTemplate = niche === 'Scraping'
+        ? this.prompts.scraperReadme
         : this.prompts.automationReadme;
-      
+
       // Build job data with metadata for prompt
       const jobDescription = upworkJobService.buildJobDescription(jobDetails);
-      
+
       // Create metadata block
       const metadata = JSON.stringify({
         platform: platform,
         tool: tool
       }, null, 2);
-      
+
       const fullPrompt = `${promptTemplate}\n\n====================================================\n\nUpwork Job Post:\n\nJob Title: ${jobDetails.title}\n\nJob Description: ${jobDescription}\n\nMetaData:\n${metadata}`;
-      
+
       this.log(campaignId, 'info', 'Sending to GPT for README generation...');
       this.log(campaignId, 'info', `   Platform: ${platform}`);
       this.log(campaignId, 'info', `   Tool: ${tool}`);
-      
+
       const launched = await this.launchChatGPTBrowser(gptAccountId, campaignId);
       browser = launched.browser;
       let page = launched.page;
@@ -2604,34 +2611,34 @@ class UpworkCampaignManager extends EventEmitter {
    */
   parseReadmeResponse(responseText, jobDetails) {
     console.log('🔍 Parsing README response from GPT...');
-    
+
     // Extract metadata block (pgsql code fence)
     const metadataMatch = responseText.match(/```pgsql\s*\n([\s\S]*?)```/);
-    
+
     let repoName = '';
     let description = '';
     let topics = [];
-    
+
     if (metadataMatch) {
       const metadata = metadataMatch[1];
       console.log('✅ Found metadata block');
-      
+
       const repoNameMatch = metadata.match(/Repo Name:\s*(.+)/);
       const descMatch = metadata.match(/Description:\s*(.+)/);
-      
+
       // Use comprehensive topic extraction
       topics = this.extractTopicsFromMetadata(metadata);
-      
+
       if (repoNameMatch) {
         repoName = repoNameMatch[1].trim();
         console.log(`  📦 Repo Name: "${repoName}"`);
       }
-      
+
       if (descMatch) {
         description = descMatch[1].trim();
         console.log(`  📝 Description: ${description}`);
       }
-      
+
       if (topics.length > 0) {
         console.log(`  🏷️  Topics extracted (${topics.length}): ${topics.join(', ')}`);
       } else {
@@ -2640,12 +2647,12 @@ class UpworkCampaignManager extends EventEmitter {
     } else {
       console.log('⚠️  No metadata block found');
     }
-    
+
     // Extract README markdown (second code fence)
     const readmeMatch = responseText.match(/```markdown\s*\n([\s\S]*?)```/);
     const readme = readmeMatch ? readmeMatch[1].trim() : '';
     console.log(`📄 README extracted (${readme.length} chars)`);
-    
+
     // Fallback values
     if (!repoName) {
       repoName = jobDetails.title
@@ -2654,14 +2661,14 @@ class UpworkCampaignManager extends EventEmitter {
         .replace(/^-+|-+$/g, '');
       console.log(`⚠️  Using fallback repo name: ${repoName}`);
     }
-    
+
     if (!description) {
       description = jobDetails.title;
       console.log(`⚠️  Using fallback description`);
     }
-    
+
     console.log(`✅ Parse complete - ${topics.length} topics ready`);
-    
+
     return {
       repo_name: repoName,
       description,
@@ -2757,405 +2764,405 @@ class UpworkCampaignManager extends EventEmitter {
    * Main campaign loop - REAL-TIME job detection with deduplication
    */
   async startCampaign(id) {
-  console.log('\n===== STARTING UPWORK CAMPAIGN (REAL-TIME MODE) =====');
-  console.log('Campaign ID:', id);
-  
-  if (this.running.get(id)) {
-    console.log('Campaign already running');
-    return;
-  }
+    console.log('\n===== STARTING UPWORK CAMPAIGN (REAL-TIME MODE) =====');
+    console.log('Campaign ID:', id);
 
-  this.running.set(id, true);
-  this.setStatus(id, 'Running');
-  
-  // Initialize seen jobs set for this campaign
-  if (!this.seenJobIds.has(id)) {
-    this.seenJobIds.set(id, new Set());
-  }
-
-  const campaign = await storage.getUpworkCampaign(id);
-
-  if (!campaign) {
-    console.log('Campaign not found');
-    this.running.delete(id);
-    return;
-  }
-
-  console.log('Campaign found:', campaign.name);
-  console.log('Search input:', campaign.upworkSearchInput);
-
-  try {
-    this.log(id, 'info', `🚀 Starting REAL-TIME Upwork campaign: ${campaign.name}`);
-    this.log(id, 'info', `🔍 Search query: ${campaign.upworkSearchInput}`);
-    this.log(id, 'info', `⏱️ Mode: Real-time (fetching jobs posted within 15 minutes)`);
-    this.log(id, 'info', `🛡️ Duplicate detection: ENABLED`);
-
-    // Get GPT cookies
-    let cookies;
-    try {
-      cookies = await this.getGPTCookies(campaign.gptAccountId, id);
-    } catch (cookieError) {
-      this.log(id, 'warning', `❌ Stored cookies expired — proactively refreshing...`);
-      try {
-        await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
-        cookies = await this.getGPTCookies(campaign.gptAccountId, id);
-      } catch (refreshError) {
-        this.log(id, 'error', `❌ Cannot start campaign: cookie refresh failed — ${refreshError.message}`);
-        await this.setStatus(id, 'Failed');
-        this.running.delete(id);
-        return;
-      }
+    if (this.running.get(id)) {
+      console.log('Campaign already running');
+      return;
     }
 
-    // A: Proactive cookie health check — verify session freshness before processing jobs
-    try {
-      const nowSec = Date.now() / 1000;
-      const sessionCookie = cookies.find(c => c.name === '__Secure-next-auth.session-token');
-      const isStale = !sessionCookie ||
-        !sessionCookie.value ||
-        sessionCookie.value.length <= 20 ||
-        (sessionCookie.expires && sessionCookie.expires < nowSec + 300); // expiring within 5 min
-      if (isStale) {
-        this.log(id, 'warning', 'GPT session token expiring soon — proactively refreshing...');
-        await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
-        cookies = await this.getGPTCookies(campaign.gptAccountId, id);
-      }
-    } catch (proactiveError) {
-      // Non-fatal: the campaign will try auto-login when needed
-      this.log(id, 'warning', `Proactive cookie refresh failed (will retry on demand): ${proactiveError.message}`);
+    this.running.set(id, true);
+    this.setStatus(id, 'Running');
+
+    // Initialize seen jobs set for this campaign
+    if (!this.seenJobIds.has(id)) {
+      this.seenJobIds.set(id, new Set());
     }
 
-    let processed = 0;
-    let viable = 0;
-    let nonViable = 0;
-    let duplicatesSkipped = 0; // NEW: Track duplicates
-    let successfulRepos = [];
+    const campaign = await storage.getUpworkCampaign(id);
 
-    const seenJobs = this.seenJobIds.get(id);
-    let isFirstScan = true;
-    let loopErrorCount = 0;
+    if (!campaign) {
+      console.log('Campaign not found');
+      this.running.delete(id);
+      return;
+    }
 
-    // Infinite loop - continuously polls for NEW jobs
-    while (this.running.get(id)) {
-      // Circuit breaker check
-      if (this.isCircuitOpen(id)) {
-        this.log(id, 'error', `🛑 Circuit breaker OPEN after ${this.circuitBreakerThreshold} consecutive failures. Pausing campaign.`);
-        await this.setStatus(id, 'Paused');
-        this.running.delete(id);
-        break;
+    console.log('Campaign found:', campaign.name);
+    console.log('Search input:', campaign.upworkSearchInput);
+
+    try {
+      this.log(id, 'info', `🚀 Starting REAL-TIME Upwork campaign: ${campaign.name}`);
+      this.log(id, 'info', `🔍 Search query: ${campaign.upworkSearchInput}`);
+      this.log(id, 'info', `⏱️ Mode: Real-time (fetching jobs posted within 15 minutes)`);
+      this.log(id, 'info', `🛡️ Duplicate detection: ENABLED`);
+
+      // Get GPT cookies
+      let cookies;
+      try {
+        cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+      } catch (cookieError) {
+        this.log(id, 'warning', `❌ Stored cookies expired — proactively refreshing...`);
+        try {
+          await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
+          cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+        } catch (refreshError) {
+          this.log(id, 'error', `❌ Cannot start campaign: cookie refresh failed — ${refreshError.message}`);
+          await this.setStatus(id, 'Failed');
+          this.running.delete(id);
+          return;
+        }
       }
 
+      // A: Proactive cookie health check — verify session freshness before processing jobs
       try {
-        const lookbackMinutes = isFirstScan ? 1440 : 15;
-        this.log(id, 'info', `🔍 Scanning for new jobs posted within ${lookbackMinutes === 1440 ? '24 hours' : '15 minutes'}...`);
-
-        // Fetch recent jobs (limit 10 to catch new posts quickly)
-        const jobs = await upworkJobService.fetchJobs(campaign.upworkSearchInput, 10);
-
-        // Reset loop error count on success
-        loopErrorCount = 0;
-        this.recordSuccess(id);
-
-        if (!jobs || jobs.length === 0) {
-          this.log(id, 'info', 'No jobs found in this scan. Waiting 30 seconds...');
-          isFirstScan = false;
-          await this.delay(30000);
-          continue;
+        const nowSec = Date.now() / 1000;
+        const sessionCookie = cookies.find(c => c.name === '__Secure-next-auth.session-token');
+        const isStale = !sessionCookie ||
+          !sessionCookie.value ||
+          sessionCookie.value.length <= 20 ||
+          (sessionCookie.expires && sessionCookie.expires < nowSec + 300); // expiring within 5 min
+        if (isStale) {
+          this.log(id, 'warning', 'GPT session token expiring soon — proactively refreshing...');
+          await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
+          cookies = await this.getGPTCookies(campaign.gptAccountId, id);
         }
+      } catch (proactiveError) {
+        // Non-fatal: the campaign will try auto-login when needed
+        this.log(id, 'warning', `Proactive cookie refresh failed (will retry on demand): ${proactiveError.message}`);
+      }
 
-        console.log(`📦 Fetched ${jobs.length} jobs from Upwork`);
+      let processed = 0;
+      let viable = 0;
+      let nonViable = 0;
+      let duplicatesSkipped = 0; // NEW: Track duplicates
+      let successfulRepos = [];
 
-        // Filter for NEW jobs (not seen before AND posted within time window)
-        const newJobs = [];
-        for (const job of jobs) {
-          const jobId = job.id || job.ciphertext;
+      const seenJobs = this.seenJobIds.get(id);
+      let isFirstScan = true;
+      let loopErrorCount = 0;
 
-          if (!jobId) {
-            continue;
-          }
-
-          // Skip if already processed
-          if (seenJobs.has(jobId)) {
-            continue;
-          }
-
-          // Check if posted within time window (24 hours on first scan, 15 minutes on subsequent scans)
-          if (!this.isJobPostedWithinMinutes(job.createdDateTime, lookbackMinutes)) {
-            continue;
-          }
-
-          // Mark as seen immediately to prevent duplicates
-          seenJobs.add(jobId);
-          newJobs.push(job);
-          this.log(id, 'success', `🆕 New job: "${job.title.substring(0, 50)}..."`);
-        }
-
-        if (newJobs.length === 0) {
-          this.log(id, 'info', `No new jobs posted within ${lookbackMinutes === 1440 ? '24 hours' : '15 minutes'}. Waiting 30 seconds...`);
-          isFirstScan = false;
-          await this.delay(30000);
-          continue;
-        }
-
-        this.log(id, 'success', `✅ Found ${newJobs.length} NEW jobs to process!`);
-
-        // Process each NEW job
-        for (const job of newJobs) {
-          // Check if campaign was stopped
-          if (!this.running.get(id)) {
-            this.log(id, 'info', 'Campaign stopped by user');
-            break;
-          }
-
-          try {
-            processed++;
-            this.updateProgress(id, processed, processed, viable, nonViable);
-
-            this.log(id, 'info', `\n📋 Processing job ${processed}: ${job.title}`);
-
-            // Use simple job data (no full details fetch needed)
-            this.log(id, 'info', '🤖 Filtering job with GPT (using simple data)...');
-            const filterResult = await this.filterJobWithGPT(job, cookies, id, campaign.gptAccountId);
-            
-            if (!filterResult.viable) {
-              nonViable++;
-              this.updateProgress(id, processed, processed, viable, nonViable);
-              this.log(id, 'warning', `❌ Job rejected by GPT filter`);
-              this.log(id, 'warning', `   Platform: ${filterResult.platform}`);
-              this.log(id, 'warning', `   Tool: ${filterResult.tool}`);
-              this.log(id, 'warning', `   Reason: ${filterResult.reason || 'Not specified'}`);
-              continue;
-            }
-            
-            // ====== DUPLICATE DETECTION CHECK ======
-            this.log(id, 'info', '🔍 Checking for duplicate jobs in database...');
-            
-            // First check by Upwork job ID (exact, global, cross-campaign)
-            const jobId = job.id || job.ciphertext;
-            if (jobId) {
-              const idDuplicate = await storage.checkDuplicateByJobId(jobId);
-              if (idDuplicate) {
-                duplicatesSkipped++;
-                nonViable++;
-                this.updateProgress(id, processed, processed, viable, nonViable);
-                this.log(id, 'warning', `⚠️ DUPLICATE BY JOB ID - Skipping job`);
-                this.log(id, 'warning', `   Job ID: ${jobId}`);
-                this.log(id, 'info', `   Total duplicates skipped so far: ${duplicatesSkipped}`);
-                continue;
-              }
-            }
-            
-            // Fallback: check by title similarity
-            const isDuplicate = await storage.checkJobDuplicate(
-              job.title,
-              job.description,
-              0.85
-            );
-            
-            if (isDuplicate) {
-              duplicatesSkipped++;
-              nonViable++;
-              this.updateProgress(id, processed, processed, viable, nonViable);
-              
-              this.log(id, 'warning', `⚠️ DUPLICATE BY TITLE - Skipping job`);
-              this.log(id, 'warning', `   Original job: "${isDuplicate.title}"`);
-              this.log(id, 'warning', `   Processed on: ${new Date(isDuplicate.createdAt).toLocaleString()}`);
-              this.log(id, 'warning', `   Campaign: ${isDuplicate.campaignId}`);
-              if (isDuplicate.repoUrl) {
-                this.log(id, 'warning', `   Repo: ${isDuplicate.repoUrl}`);
-              }
-              this.log(id, 'info', `   Total duplicates skipped so far: ${duplicatesSkipped}`);
-              
-              continue;
-            }
-            
-            this.log(id, 'success', `✅ No duplicate found - proceeding with job`);
-            // ====== END DUPLICATE CHECK ======
-            
-            viable++;
-            this.updateProgress(id, processed, processed, viable, nonViable);
-            this.log(id, 'success', `\n✅ VIABLE JOB: "${job.title}"`);
-            this.log(id, 'success', `   Platform: ${filterResult.platform}`);
-            this.log(id, 'success', `   Tool: ${filterResult.tool}`);
-            
-            // ====== GENERATE CONTENT (Product, Blog, Service) ======
-            this.log(id, 'info', `🚀 Triggering content generation...`);
-            this.log(id, 'info', `[CONTENT] Starting for: "${job.title}"`);
-            
-            const jobDescription = upworkJobService.buildJobDescription(job);
-            let sharedBrowser = null;
-            
-            try {
-              // Launch shared browser for all 3 prompts (avoids 2 redundant navigations)
-              const launched = await this.launchChatGPTBrowser(
-                campaign.gptAccountId,
-                id
-              );
-              sharedBrowser = launched.browser;
-              const sharedPage = launched.page;
-              this.activeBrowsers.set(id, sharedBrowser);
-
-              // Navigate and set up session once
-              await this.navigateToChatGPT(sharedPage, id);
-              const profileHasSession = await this.checkChatGPTLoggedInWithRetry(sharedPage);
-              const sanitizedCookies = profileHasSession ? [] : this.sanitizeCookies(cookies);
-              if (sanitizedCookies.length > 0) {
-                await sharedPage.setCookie(...sanitizedCookies);
-              }
-              await this.navigateToChatGPT(sharedPage, id);
-              await this.ensureChatGPTSession(sharedPage, id, campaign.gptAccountId);
-
-              const contentResult = await generateForJob({
-                jobTitle: job.title,
-                jobDescription,
-                cookies,
-                campaignId: id,
-                gptAccountId: campaign.gptAccountId,
-                logFn: (msg) => this.log(id, 'info', msg),
-                shouldAbort: () => !this.running.get(id),
-                jobSkills: job.skills ? (Array.isArray(job.skills) ? job.skills.join(', ') : job.skills) : 'Not specified',
-                jobBudget: job.budget || 'Not specified',
-                existingBrowser: sharedBrowser,
-                existingPage: sharedPage,
-                sendPrompt: (prompt) => this.sendPromptAndReadGPTResponse(sharedPage, prompt, id),
-              });
-              
-              this.log(id, 'success', `✅ Content generated successfully`);
-              if (contentResult.productParsed) this.log(id, 'success', `   Product: ${contentResult.productParsed.title}`);
-              if (contentResult.blogParsed) this.log(id, 'success', `   Blog: ${contentResult.blogParsed.title}`);
-              if (contentResult.serviceParsed) this.log(id, 'success', `   Service: ${contentResult.serviceParsed.title}`);
-              
-              // Also store in jobs_selected
-              try {
-                await storage.createJobsSelected({
-                  campaignId: id,
-                  title: job.title,
-                  description: jobDescription,
-                  niche: filterResult.niche,
-                  platform: filterResult.platform,
-                  tool: filterResult.tool,
-                  upworkJobUrl: job.url || `https://www.upwork.com/jobs/${job.id || job.ciphertext}`
-                });
-              } catch (jsError) {
-                this.log(id, 'warning', `⚠️ Failed to store in jobs_selected: ${jsError.message}`);
-              }
-            } catch (contentError) {
-              this.log(id, 'error', `❌ Content generation failed: ${contentError.message}`);
-              this.log(id, 'info', 'Continuing to next job...');
-            } finally {
-              if (sharedBrowser) {
-                await sharedBrowser.close().catch(() => {});
-                this.activeBrowsers.delete(id);
-              }
-            }
-            
-            // ====== STORE PROCESSED JOB TO PREVENT FUTURE DUPLICATES ======
-            try {
-              await storage.storeProcessedJob({
-                id: job.id || job.ciphertext,
-                title: job.title,
-                description: job.description,
-                campaignId: id,
-                niche: filterResult.niche,
-                platform: filterResult.platform,
-                tool: filterResult.tool,
-                repoUrl: '',
-                upworkJobUrl: job.url || `https://www.upwork.com/jobs/${job.id || job.ciphertext}`,
-                viable: true,
-                rejectionReason: null
-              });
-              
-              this.log(id, 'success', `💾 Job stored in database to prevent future duplicates`);
-            } catch (storeError) {
-              this.log(id, 'warning', `⚠️ Failed to store job in duplicate database: ${storeError.message}`);
-            }
-            
-            // Record result
-            successfulRepos.push({
-              jobId: job.id,
-              jobTitle: job.title,
-              niche: filterResult.niche,
-              platform: filterResult.platform,
-              tool: filterResult.tool,
-              timestamp: new Date().toISOString()
-            });
-            
-            // Save results
-            await storage.updateUpworkCampaign(id, {
-              results: successfulRepos
-            });
-            
-          } catch (error) {
-            this.log(id, 'error', `Failed to process job: ${error.message}`);
-            if (this.isChatGPTAuthError(error)) {
-              this.log(id, 'warning', 'GPT session expired — attempting auto re-login to refresh cookies...');
-              try {
-                await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
-                cookies = await this.getGPTCookies(campaign.gptAccountId, id);
-                this.log(id, 'info', 'Cookies refreshed — continuing to next job with fresh session.');
-              } catch (refreshError) {
-                this.log(id, 'error', `Auto-login failed: ${refreshError.message}`);
-                this.log(id, 'error', 'Stopping campaign because the selected GPT account is not logged in.');
-                await this.setStatus(id, 'Failed');
-                this.running.delete(id);
-                break;
-              }
-            }
-            // Continue with next job for non-auth failures
-          }
-        }
-        
-        if (!this.running.get(id)) {
+      // Infinite loop - continuously polls for NEW jobs
+      while (this.running.get(id)) {
+        // Circuit breaker check
+        if (this.isCircuitOpen(id)) {
+          this.log(id, 'error', `🛑 Circuit breaker OPEN after ${this.circuitBreakerThreshold} consecutive failures. Pausing campaign.`);
+          await this.setStatus(id, 'Paused');
+          this.running.delete(id);
           break;
         }
 
-        // After processing batch, wait 30 seconds before next poll
-        this.log(id, 'info', '✅ Batch processed. Waiting 30 seconds before next scan...');
-        if (duplicatesSkipped > 0) {
-          this.log(id, 'info', `   📊 Total duplicates skipped: ${duplicatesSkipped}`);
+        try {
+          const lookbackMinutes = isFirstScan ? 1440 : 15;
+          this.log(id, 'info', `🔍 Scanning for new jobs posted within ${lookbackMinutes === 1440 ? '24 hours' : '15 minutes'}...`);
+
+          // Fetch recent jobs (limit 10 to catch new posts quickly)
+          const jobs = await upworkJobService.fetchJobs(campaign.upworkSearchInput, 10);
+
+          // Reset loop error count on success
+          loopErrorCount = 0;
+          this.recordSuccess(id);
+
+          if (!jobs || jobs.length === 0) {
+            this.log(id, 'info', 'No jobs found in this scan. Waiting 30 seconds...');
+            isFirstScan = false;
+            await this.delay(30000);
+            continue;
+          }
+
+          console.log(`📦 Fetched ${jobs.length} jobs from Upwork`);
+
+          // Filter for NEW jobs (not seen before AND posted within time window)
+          const newJobs = [];
+          for (const job of jobs) {
+            const jobId = job.id || job.ciphertext;
+
+            if (!jobId) {
+              continue;
+            }
+
+            // Skip if already processed
+            if (seenJobs.has(jobId)) {
+              continue;
+            }
+
+            // Check if posted within time window (24 hours on first scan, 15 minutes on subsequent scans)
+            if (!this.isJobPostedWithinMinutes(job.createdDateTime, lookbackMinutes)) {
+              continue;
+            }
+
+            // Mark as seen immediately to prevent duplicates
+            seenJobs.add(jobId);
+            newJobs.push(job);
+            this.log(id, 'success', `🆕 New job: "${job.title.substring(0, 50)}..."`);
+          }
+
+          if (newJobs.length === 0) {
+            this.log(id, 'info', `No new jobs posted within ${lookbackMinutes === 1440 ? '24 hours' : '15 minutes'}. Waiting 30 seconds...`);
+            isFirstScan = false;
+            await this.delay(30000);
+            continue;
+          }
+
+          this.log(id, 'success', `✅ Found ${newJobs.length} NEW jobs to process!`);
+
+          // Process each NEW job
+          for (const job of newJobs) {
+            // Check if campaign was stopped
+            if (!this.running.get(id)) {
+              this.log(id, 'info', 'Campaign stopped by user');
+              break;
+            }
+
+            try {
+              processed++;
+              this.updateProgress(id, processed, processed, viable, nonViable);
+
+              this.log(id, 'info', `\n📋 Processing job ${processed}: ${job.title}`);
+
+              // Use simple job data (no full details fetch needed)
+              this.log(id, 'info', '🤖 Filtering job with GPT (using simple data)...');
+              const filterResult = await this.filterJobWithGPT(job, cookies, id, campaign.gptAccountId);
+
+              if (!filterResult.viable) {
+                nonViable++;
+                this.updateProgress(id, processed, processed, viable, nonViable);
+                this.log(id, 'warning', `❌ Job rejected by GPT filter`);
+                this.log(id, 'warning', `   Platform: ${filterResult.platform}`);
+                this.log(id, 'warning', `   Tool: ${filterResult.tool}`);
+                this.log(id, 'warning', `   Reason: ${filterResult.reason || 'Not specified'}`);
+                continue;
+              }
+
+              // ====== DUPLICATE DETECTION CHECK ======
+              this.log(id, 'info', '🔍 Checking for duplicate jobs in database...');
+
+              // First check by Upwork job ID (exact, global, cross-campaign)
+              const jobId = job.id || job.ciphertext;
+              if (jobId) {
+                const idDuplicate = await storage.checkDuplicateByJobId(jobId);
+                if (idDuplicate) {
+                  duplicatesSkipped++;
+                  nonViable++;
+                  this.updateProgress(id, processed, processed, viable, nonViable);
+                  this.log(id, 'warning', `⚠️ DUPLICATE BY JOB ID - Skipping job`);
+                  this.log(id, 'warning', `   Job ID: ${jobId}`);
+                  this.log(id, 'info', `   Total duplicates skipped so far: ${duplicatesSkipped}`);
+                  continue;
+                }
+              }
+
+              // Fallback: check by title similarity
+              const isDuplicate = await storage.checkJobDuplicate(
+                job.title,
+                job.description,
+                0.85
+              );
+
+              if (isDuplicate) {
+                duplicatesSkipped++;
+                nonViable++;
+                this.updateProgress(id, processed, processed, viable, nonViable);
+
+                this.log(id, 'warning', `⚠️ DUPLICATE BY TITLE - Skipping job`);
+                this.log(id, 'warning', `   Original job: "${isDuplicate.title}"`);
+                this.log(id, 'warning', `   Processed on: ${new Date(isDuplicate.createdAt).toLocaleString()}`);
+                this.log(id, 'warning', `   Campaign: ${isDuplicate.campaignId}`);
+                if (isDuplicate.repoUrl) {
+                  this.log(id, 'warning', `   Repo: ${isDuplicate.repoUrl}`);
+                }
+                this.log(id, 'info', `   Total duplicates skipped so far: ${duplicatesSkipped}`);
+
+                continue;
+              }
+
+              this.log(id, 'success', `✅ No duplicate found - proceeding with job`);
+              // ====== END DUPLICATE CHECK ======
+
+              viable++;
+              this.updateProgress(id, processed, processed, viable, nonViable);
+              this.log(id, 'success', `\n✅ VIABLE JOB: "${job.title}"`);
+              this.log(id, 'success', `   Platform: ${filterResult.platform}`);
+              this.log(id, 'success', `   Tool: ${filterResult.tool}`);
+
+              // ====== GENERATE CONTENT (Product, Blog, Service) ======
+              this.log(id, 'info', `🚀 Triggering content generation...`);
+              this.log(id, 'info', `[CONTENT] Starting for: "${job.title}"`);
+
+              const jobDescription = upworkJobService.buildJobDescription(job);
+              let sharedBrowser = null;
+
+              try {
+                // Launch shared browser for all 3 prompts (avoids 2 redundant navigations)
+                const launched = await this.launchChatGPTBrowser(
+                  campaign.gptAccountId,
+                  id
+                );
+                sharedBrowser = launched.browser;
+                const sharedPage = launched.page;
+                this.activeBrowsers.set(id, sharedBrowser);
+
+                // Navigate and set up session once
+                await this.navigateToChatGPT(sharedPage, id);
+                const profileHasSession = await this.checkChatGPTLoggedInWithRetry(sharedPage);
+                const sanitizedCookies = profileHasSession ? [] : this.sanitizeCookies(cookies);
+                if (sanitizedCookies.length > 0) {
+                  await sharedPage.setCookie(...sanitizedCookies);
+                }
+                await this.navigateToChatGPT(sharedPage, id);
+                await this.ensureChatGPTSession(sharedPage, id, campaign.gptAccountId);
+
+                const contentResult = await generateForJob({
+                  jobTitle: job.title,
+                  jobDescription,
+                  cookies,
+                  campaignId: id,
+                  gptAccountId: campaign.gptAccountId,
+                  logFn: (msg) => this.log(id, 'info', msg),
+                  shouldAbort: () => !this.running.get(id),
+                  jobSkills: job.skills ? (Array.isArray(job.skills) ? job.skills.join(', ') : job.skills) : 'Not specified',
+                  jobBudget: job.budget || 'Not specified',
+                  existingBrowser: sharedBrowser,
+                  existingPage: sharedPage,
+                  sendPrompt: (prompt) => this.sendPromptAndReadGPTResponse(sharedPage, prompt, id),
+                });
+
+                this.log(id, 'success', `✅ Content generated successfully`);
+                if (contentResult.productParsed) this.log(id, 'success', `   Product: ${contentResult.productParsed.title}`);
+                if (contentResult.blogParsed) this.log(id, 'success', `   Blog: ${contentResult.blogParsed.title}`);
+                if (contentResult.serviceParsed) this.log(id, 'success', `   Service: ${contentResult.serviceParsed.title}`);
+
+                // Also store in jobs_selected
+                try {
+                  await storage.createJobsSelected({
+                    campaignId: id,
+                    title: job.title,
+                    description: jobDescription,
+                    niche: filterResult.niche,
+                    platform: filterResult.platform,
+                    tool: filterResult.tool,
+                    upworkJobUrl: job.url || `https://www.upwork.com/jobs/${job.id || job.ciphertext}`
+                  });
+                } catch (jsError) {
+                  this.log(id, 'warning', `⚠️ Failed to store in jobs_selected: ${jsError.message}`);
+                }
+              } catch (contentError) {
+                this.log(id, 'error', `❌ Content generation failed: ${contentError.message}`);
+                this.log(id, 'info', 'Continuing to next job...');
+              } finally {
+                if (sharedBrowser) {
+                  await sharedBrowser.close().catch(() => { });
+                  this.activeBrowsers.delete(id);
+                }
+              }
+
+              // ====== STORE PROCESSED JOB TO PREVENT FUTURE DUPLICATES ======
+              try {
+                await storage.storeProcessedJob({
+                  id: job.id || job.ciphertext,
+                  title: job.title,
+                  description: job.description,
+                  campaignId: id,
+                  niche: filterResult.niche,
+                  platform: filterResult.platform,
+                  tool: filterResult.tool,
+                  repoUrl: '',
+                  upworkJobUrl: job.url || `https://www.upwork.com/jobs/${job.id || job.ciphertext}`,
+                  viable: true,
+                  rejectionReason: null
+                });
+
+                this.log(id, 'success', `💾 Job stored in database to prevent future duplicates`);
+              } catch (storeError) {
+                this.log(id, 'warning', `⚠️ Failed to store job in duplicate database: ${storeError.message}`);
+              }
+
+              // Record result
+              successfulRepos.push({
+                jobId: job.id,
+                jobTitle: job.title,
+                niche: filterResult.niche,
+                platform: filterResult.platform,
+                tool: filterResult.tool,
+                timestamp: new Date().toISOString()
+              });
+
+              // Save results
+              await storage.updateUpworkCampaign(id, {
+                results: successfulRepos
+              });
+
+            } catch (error) {
+              this.log(id, 'error', `Failed to process job: ${error.message}`);
+              if (this.isChatGPTAuthError(error)) {
+                this.log(id, 'warning', 'GPT session expired — attempting auto re-login to refresh cookies...');
+                try {
+                  await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
+                  cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+                  this.log(id, 'info', 'Cookies refreshed — continuing to next job with fresh session.');
+                } catch (refreshError) {
+                  this.log(id, 'error', `Auto-login failed: ${refreshError.message}`);
+                  this.log(id, 'error', 'Stopping campaign because the selected GPT account is not logged in.');
+                  await this.setStatus(id, 'Failed');
+                  this.running.delete(id);
+                  break;
+                }
+              }
+              // Continue with next job for non-auth failures
+            }
+          }
+
+          if (!this.running.get(id)) {
+            break;
+          }
+
+          // After processing batch, wait 30 seconds before next poll
+          this.log(id, 'info', '✅ Batch processed. Waiting 30 seconds before next scan...');
+          if (duplicatesSkipped > 0) {
+            this.log(id, 'info', `   📊 Total duplicates skipped: ${duplicatesSkipped}`);
+          }
+          isFirstScan = false;
+          await this.delay(30000);
+
+        } catch (error) {
+          isFirstScan = false;
+          loopErrorCount++;
+          const failureCount = this.recordFailure(id, error);
+
+          // Exponential backoff: 5s, 10s, 20s, 40s, max 60s
+          const backoffDelay = Math.min(5000 * Math.pow(2, loopErrorCount - 1), 60000);
+
+          this.log(id, 'error', `❌ Error in campaign loop (${loopErrorCount} consecutive): ${error.message}`);
+          this.log(id, 'warning', `⚠️ Failure count: ${failureCount}/${this.circuitBreakerThreshold}`);
+          this.log(id, 'info', `⏱️ Retrying in ${Math.round(backoffDelay / 1000)}s...`);
+          await this.delay(backoffDelay);
         }
-        isFirstScan = false;
-        await this.delay(30000);
-        
-      } catch (error) {
-        isFirstScan = false;
-        loopErrorCount++;
-        const failureCount = this.recordFailure(id, error);
-
-        // Exponential backoff: 5s, 10s, 20s, 40s, max 60s
-        const backoffDelay = Math.min(5000 * Math.pow(2, loopErrorCount - 1), 60000);
-
-        this.log(id, 'error', `❌ Error in campaign loop (${loopErrorCount} consecutive): ${error.message}`);
-        this.log(id, 'warning', `⚠️ Failure count: ${failureCount}/${this.circuitBreakerThreshold}`);
-        this.log(id, 'info', `⏱️ Retrying in ${Math.round(backoffDelay / 1000)}s...`);
-        await this.delay(backoffDelay);
       }
-    }
 
-    // After the while loop: distinguish user stop from natural completion
-    if (this.stoppedByUser.has(id)) {
-      this.log(id, 'info', 'Campaign stopped by user');
-      this.stoppedByUser.delete(id);
-    } else {
-      const latestCampaign = await storage.getUpworkCampaign(id);
-      if (latestCampaign?.status === 'Failed') {
-        this.log(id, 'error', 'Campaign ended with Failed status');
+      // After the while loop: distinguish user stop from natural completion
+      if (this.stoppedByUser.has(id)) {
+        this.log(id, 'info', 'Campaign stopped by user');
+        this.stoppedByUser.delete(id);
       } else {
-        this.log(id, 'success', `Campaign completed - Total duplicates prevented: ${duplicatesSkipped}`);
-        await this.setStatus(id, 'Completed');
+        const latestCampaign = await storage.getUpworkCampaign(id);
+        if (latestCampaign?.status === 'Failed') {
+          this.log(id, 'error', 'Campaign ended with Failed status');
+        } else {
+          this.log(id, 'success', `Campaign completed - Total duplicates prevented: ${duplicatesSkipped}`);
+          await this.setStatus(id, 'Completed');
+        }
       }
-    }
 
-  } catch (error) {
-    this.log(id, 'error', `Campaign failed: ${error.message}`);
-    await this.setStatus(id, 'Failed');
-  } finally {
-    this.running.delete(id);
-    this.stoppedByUser.delete(id);
-    // Clear seen jobs for this campaign
-    this.seenJobIds.delete(id);
+    } catch (error) {
+      this.log(id, 'error', `Campaign failed: ${error.message}`);
+      await this.setStatus(id, 'Failed');
+    } finally {
+      this.running.delete(id);
+      this.stoppedByUser.delete(id);
+      // Clear seen jobs for this campaign
+      this.seenJobIds.delete(id);
+    }
   }
-}
 
   async stopCampaign(id) {
     console.log(`Stopping Upwork campaign: ${id}`);
@@ -3244,7 +3251,7 @@ class UpworkCampaignManager extends EventEmitter {
       // 1. https://www.upwork.com/jobs/~01234567890abcdef
       // 2. https://www.upwork.com/ab/proposals/job/~01234567890abcdef
       // 3. Job ID might be in URL params or path
-      
+
       const urlObj = new URL(url);
       const pathname = urlObj.pathname || '';
 
@@ -3282,356 +3289,356 @@ class UpworkCampaignManager extends EventEmitter {
    * @param {string} id - Campaign ID
    */
   parseManualJobEntry(jobText) {
-  const lines = jobText.split('\n').map(l => l.trim()).filter(l => l);
-  
-  const job = {
-    title: '',
-    description: '',
-    skills: '',
-    budget: '',
-    duration: '',
-    fullText: jobText
-  };
-  
-  for (const line of lines) {
-    const lower = line.toLowerCase();
-    
-    if (lower.startsWith('job title:') || lower.startsWith('title:')) {
-      job.title = line.split(':').slice(1).join(':').trim();
-    } else if (lower.startsWith('description:')) {
-      job.description = line.split(':').slice(1).join(':').trim();
-    } else if (lower.startsWith('skills:') || lower.startsWith('required skills:')) {
-      job.skills = line.split(':').slice(1).join(':').trim();
-    } else if (lower.startsWith('budget:')) {
-      job.budget = line.split(':').slice(1).join(':').trim();
-    } else if (lower.startsWith('duration:')) {
-      job.duration = line.split(':').slice(1).join(':').trim();
-    } else if (!job.description && job.title) {
-      // If we have a title but no description yet, treat remaining lines as description
-      job.description += (job.description ? ' ' : '') + line;
-    }
-  }
-  
-  // Fallback: if no structured data found, use first line as title and rest as description
-  if (!job.title && lines.length > 0) {
-    job.title = lines[0];
-    job.description = lines.slice(1).join(' ');
-  }
-  
-  return job;
-}
+    const lines = jobText.split('\n').map(l => l.trim()).filter(l => l);
 
-/**
- * Build job description for GPT from manual entry
- * @param {Object} jobEntry - Parsed job object
- * @returns {string} Formatted job description
- */
-buildManualJobDescription(jobEntry) {
-  const sections = [];
-  
-  if (jobEntry.title) {
-    sections.push(`Job Title: ${jobEntry.title}`);
-  }
-  
-  if (jobEntry.description) {
-    sections.push(`\nJob Description:\n${jobEntry.description}`);
-  }
-  
-  if (jobEntry.skills) {
-    sections.push(`\nRequired Skills: ${jobEntry.skills}`);
-  }
-  
-  if (jobEntry.budget) {
-    sections.push(`\nBudget: ${jobEntry.budget}`);
-  }
-  
-  if (jobEntry.duration) {
-    sections.push(`\nDuration: ${jobEntry.duration}`);
-  }
-  
-  return sections.join('\n');
-}
+    const job = {
+      title: '',
+      description: '',
+      skills: '',
+      budget: '',
+      duration: '',
+      fullText: jobText
+    };
 
-/**
- * Start a scrape-jobs campaign with manual job entries
- * @param {string} id - Campaign ID
- */
-async startScrapeJobsCampaign(id) {
-  console.log('\n===== STARTING MANUAL JOBS CAMPAIGN =====');
-  console.log('Campaign ID:', id);
-  
-  if (this.running.get(id)) {
-    console.log('Campaign already running');
-    return;
-  }
+    for (const line of lines) {
+      const lower = line.toLowerCase();
 
-  this.running.set(id, true);
-  this.setStatus(id, 'Running');
-
-  const campaign = await storage.getScrapeJobsCampaign(id);
-
-  if (!campaign) {
-    console.log('Campaign not found');
-    this.running.delete(id);
-    return;
-  }
-
-  console.log('Campaign found:', campaign.name);
-  console.log('Manual jobs to process:', campaign.scrapeJobUrls.length);
-  console.log('Selected niche:', campaign.scrapeJobNiche);
-
-  try {
-    this.log(id, 'info', `🚀 Starting Manual Jobs campaign: ${campaign.name}`);
-    this.log(id, 'info', `📋 Total jobs to process: ${campaign.scrapeJobUrls.length}`);
-    this.log(id, 'info', `🎯 Niche: ${campaign.scrapeJobNiche}`);
-    this.log(id, 'info', `🛡️ Duplicate detection: ENABLED`);
-    
-    // Get GPT cookies
-    const cookies = await this.getGPTCookies(campaign.gptAccountId, id);
-    
-    let processed = 0;
-    let successfulRepos = 0;
-    let duplicates = 0;
-    let errors = 0;
-    let results = [];
-    
-    // Process each manual job entry
-    for (let i = 0; i < campaign.scrapeJobUrls.length; i++) {
-      // Check if campaign was stopped
-      if (!this.running.get(id)) {
-        this.log(id, 'info', 'Campaign stopped by user');
-        break;
+      if (lower.startsWith('job title:') || lower.startsWith('title:')) {
+        job.title = line.split(':').slice(1).join(':').trim();
+      } else if (lower.startsWith('description:')) {
+        job.description = line.split(':').slice(1).join(':').trim();
+      } else if (lower.startsWith('skills:') || lower.startsWith('required skills:')) {
+        job.skills = line.split(':').slice(1).join(':').trim();
+      } else if (lower.startsWith('budget:')) {
+        job.budget = line.split(':').slice(1).join(':').trim();
+      } else if (lower.startsWith('duration:')) {
+        job.duration = line.split(':').slice(1).join(':').trim();
+      } else if (!job.description && job.title) {
+        // If we have a title but no description yet, treat remaining lines as description
+        job.description += (job.description ? ' ' : '') + line;
       }
+    }
 
-      const jobText = campaign.scrapeJobUrls[i];
-      
-      try {
-        processed++;
-        const progress = {
-          processed,
-          total: campaign.scrapeJobUrls.length,
-          successfulRepos,
-          duplicates,
-          errors
-        };
-        await storage.updateScrapeJobsCampaign(id, { progress });
-        this.emit('progress', { campaignId: id, ...progress });
-        
-        this.log(id, 'info', `\n📋 Processing job ${processed}/${campaign.scrapeJobUrls.length}`);
-        
-        // Parse manual job entry
-        this.log(id, 'info', '📝 Parsing manual job entry...');
-        const jobEntry = this.parseManualJobEntry(jobText);
-        
-        if (!jobEntry.title) {
-          this.log(id, 'error', `❌ Could not parse job entry (no title found)`);
-          errors++;
-          
-          // Update progress for parse error
-          const parseErrorProgress = {
-            processed,
-            total: campaign.scrapeJobUrls.length,
-            successfulRepos,
-            duplicates,
-            errors
-          };
-          await storage.updateScrapeJobsCampaign(id, { progress: parseErrorProgress });
-          this.emit('progress', { campaignId: id, ...parseErrorProgress });
-          
-          continue;
+    // Fallback: if no structured data found, use first line as title and rest as description
+    if (!job.title && lines.length > 0) {
+      job.title = lines[0];
+      job.description = lines.slice(1).join(' ');
+    }
+
+    return job;
+  }
+
+  /**
+   * Build job description for GPT from manual entry
+   * @param {Object} jobEntry - Parsed job object
+   * @returns {string} Formatted job description
+   */
+  buildManualJobDescription(jobEntry) {
+    const sections = [];
+
+    if (jobEntry.title) {
+      sections.push(`Job Title: ${jobEntry.title}`);
+    }
+
+    if (jobEntry.description) {
+      sections.push(`\nJob Description:\n${jobEntry.description}`);
+    }
+
+    if (jobEntry.skills) {
+      sections.push(`\nRequired Skills: ${jobEntry.skills}`);
+    }
+
+    if (jobEntry.budget) {
+      sections.push(`\nBudget: ${jobEntry.budget}`);
+    }
+
+    if (jobEntry.duration) {
+      sections.push(`\nDuration: ${jobEntry.duration}`);
+    }
+
+    return sections.join('\n');
+  }
+
+  /**
+   * Start a scrape-jobs campaign with manual job entries
+   * @param {string} id - Campaign ID
+   */
+  async startScrapeJobsCampaign(id) {
+    console.log('\n===== STARTING MANUAL JOBS CAMPAIGN =====');
+    console.log('Campaign ID:', id);
+
+    if (this.running.get(id)) {
+      console.log('Campaign already running');
+      return;
+    }
+
+    this.running.set(id, true);
+    this.setStatus(id, 'Running');
+
+    const campaign = await storage.getScrapeJobsCampaign(id);
+
+    if (!campaign) {
+      console.log('Campaign not found');
+      this.running.delete(id);
+      return;
+    }
+
+    console.log('Campaign found:', campaign.name);
+    console.log('Manual jobs to process:', campaign.scrapeJobUrls.length);
+    console.log('Selected niche:', campaign.scrapeJobNiche);
+
+    try {
+      this.log(id, 'info', `🚀 Starting Manual Jobs campaign: ${campaign.name}`);
+      this.log(id, 'info', `📋 Total jobs to process: ${campaign.scrapeJobUrls.length}`);
+      this.log(id, 'info', `🎯 Niche: ${campaign.scrapeJobNiche}`);
+      this.log(id, 'info', `🛡️ Duplicate detection: ENABLED`);
+
+      // Get GPT cookies
+      const cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+
+      let processed = 0;
+      let successfulRepos = 0;
+      let duplicates = 0;
+      let errors = 0;
+      let results = [];
+
+      // Process each manual job entry
+      for (let i = 0; i < campaign.scrapeJobUrls.length; i++) {
+        // Check if campaign was stopped
+        if (!this.running.get(id)) {
+          this.log(id, 'info', 'Campaign stopped by user');
+          break;
         }
-        
-        this.log(id, 'success', `✅ Job parsed: ${jobEntry.title}`);
-        
-        // Check for duplicates
-        this.log(id, 'info', '🔍 Checking for duplicate jobs in database...');
-        
-        const isDuplicate = await storage.checkJobDuplicate(
-          jobEntry.title,
-          jobEntry.description,
-          0.85
-        );
-        
-        if (isDuplicate) {
-          duplicates++;
-          const newProgress = {
-            processed,
-            total: campaign.scrapeJobUrls.length,
-            successfulRepos,
-            duplicates,
-            errors
-          };
-          await storage.updateScrapeJobsCampaign(id, { progress: newProgress });
-          this.emit('progress', { campaignId: id, ...newProgress });
-          
-          this.log(id, 'warning', `⚠️ DUPLICATE DETECTED - Skipping job`);
-          this.log(id, 'warning', `   Original job: "${isDuplicate.title}"`);
-          this.log(id, 'warning', `   Processed on: ${new Date(isDuplicate.createdAt).toLocaleString()}`);
-          if (isDuplicate.repoUrl) {
-            this.log(id, 'warning', `   Repo: ${isDuplicate.repoUrl}`);
-          }
-          this.log(id, 'info', `   Total duplicates skipped: ${duplicates}`);
-          
-          // Wait before next job
-          if (i < campaign.scrapeJobUrls.length - 1) {
-            this.log(id, 'info', `⏸️ Waiting ${Math.round(campaign.delayBetweenRepos / 1000)}s before next job...`);
-            await this.delay(campaign.delayBetweenRepos);
-          }
-          continue;
-        }
-        
-        this.log(id, 'success', `✅ No duplicate found - proceeding with job`);
-        
-        // Use user-selected niche (no GPT filtering needed)
-        const niche = campaign.scrapeJobNiche;
-        this.log(id, 'info', `🎯 Using selected niche: ${niche}`);
-        
-        // ====== GENERATE CONTENT (Product, Blog, Service) ======
-        this.log(id, 'info', '🚀 Generating product, blog, and service pages...');
-        
-        const jobDescription = this.buildManualJobDescription(jobEntry);
-        
+
+        const jobText = campaign.scrapeJobUrls[i];
+
         try {
-          const contentResult = await generateForJob({
-            jobTitle: jobEntry.title,
-            jobDescription,
-            cookies,
-            campaignId: id,
-            gptAccountId: campaign.gptAccountId,
-            logFn: (msg) => this.log(id, 'info', msg),
-            shouldAbort: () => !this.running.get(id),
-            jobSkills: jobEntry.skills || 'Not specified',
-            jobBudget: jobEntry.budget || 'Not specified'
-          });
-          
-          this.log(id, 'success', `✅ Content generated successfully`);
-          if (contentResult.productParsed) this.log(id, 'success', `   Product: ${contentResult.productParsed.title}`);
-          if (contentResult.blogParsed) this.log(id, 'success', `   Blog: ${contentResult.blogParsed.title}`);
-          if (contentResult.serviceParsed) this.log(id, 'success', `   Service: ${contentResult.serviceParsed.title}`);
+          processed++;
+          const progress = {
+            processed,
+            total: campaign.scrapeJobUrls.length,
+            successfulRepos,
+            duplicates,
+            errors
+          };
+          await storage.updateScrapeJobsCampaign(id, { progress });
+          this.emit('progress', { campaignId: id, ...progress });
+
+          this.log(id, 'info', `\n📋 Processing job ${processed}/${campaign.scrapeJobUrls.length}`);
+
+          // Parse manual job entry
+          this.log(id, 'info', '📝 Parsing manual job entry...');
+          const jobEntry = this.parseManualJobEntry(jobText);
+
+          if (!jobEntry.title) {
+            this.log(id, 'error', `❌ Could not parse job entry (no title found)`);
+            errors++;
+
+            // Update progress for parse error
+            const parseErrorProgress = {
+              processed,
+              total: campaign.scrapeJobUrls.length,
+              successfulRepos,
+              duplicates,
+              errors
+            };
+            await storage.updateScrapeJobsCampaign(id, { progress: parseErrorProgress });
+            this.emit('progress', { campaignId: id, ...parseErrorProgress });
+
+            continue;
+          }
+
+          this.log(id, 'success', `✅ Job parsed: ${jobEntry.title}`);
+
+          // Check for duplicates
+          this.log(id, 'info', '🔍 Checking for duplicate jobs in database...');
+
+          const isDuplicate = await storage.checkJobDuplicate(
+            jobEntry.title,
+            jobEntry.description,
+            0.85
+          );
+
+          if (isDuplicate) {
+            duplicates++;
+            const newProgress = {
+              processed,
+              total: campaign.scrapeJobUrls.length,
+              successfulRepos,
+              duplicates,
+              errors
+            };
+            await storage.updateScrapeJobsCampaign(id, { progress: newProgress });
+            this.emit('progress', { campaignId: id, ...newProgress });
+
+            this.log(id, 'warning', `⚠️ DUPLICATE DETECTED - Skipping job`);
+            this.log(id, 'warning', `   Original job: "${isDuplicate.title}"`);
+            this.log(id, 'warning', `   Processed on: ${new Date(isDuplicate.createdAt).toLocaleString()}`);
+            if (isDuplicate.repoUrl) {
+              this.log(id, 'warning', `   Repo: ${isDuplicate.repoUrl}`);
+            }
+            this.log(id, 'info', `   Total duplicates skipped: ${duplicates}`);
+
+            // Wait before next job
+            if (i < campaign.scrapeJobUrls.length - 1) {
+              this.log(id, 'info', `⏸️ Waiting ${Math.round(campaign.delayBetweenRepos / 1000)}s before next job...`);
+              await this.delay(campaign.delayBetweenRepos);
+            }
+            continue;
+          }
+
+          this.log(id, 'success', `✅ No duplicate found - proceeding with job`);
+
+          // Use user-selected niche (no GPT filtering needed)
+          const niche = campaign.scrapeJobNiche;
+          this.log(id, 'info', `🎯 Using selected niche: ${niche}`);
+
+          // ====== GENERATE CONTENT (Product, Blog, Service) ======
+          this.log(id, 'info', '🚀 Generating product, blog, and service pages...');
+
+          const jobDescription = this.buildManualJobDescription(jobEntry);
 
           try {
-            await storage.createJobsSelected({
+            const contentResult = await generateForJob({
+              jobTitle: jobEntry.title,
+              jobDescription,
+              cookies,
               campaignId: id,
+              gptAccountId: campaign.gptAccountId,
+              logFn: (msg) => this.log(id, 'info', msg),
+              shouldAbort: () => !this.running.get(id),
+              jobSkills: jobEntry.skills || 'Not specified',
+              jobBudget: jobEntry.budget || 'Not specified'
+            });
+
+            this.log(id, 'success', `✅ Content generated successfully`);
+            if (contentResult.productParsed) this.log(id, 'success', `   Product: ${contentResult.productParsed.title}`);
+            if (contentResult.blogParsed) this.log(id, 'success', `   Blog: ${contentResult.blogParsed.title}`);
+            if (contentResult.serviceParsed) this.log(id, 'success', `   Service: ${contentResult.serviceParsed.title}`);
+
+            try {
+              await storage.createJobsSelected({
+                campaignId: id,
+                title: jobEntry.title,
+                description: jobDescription,
+                niche: niche,
+                platform: 'None',
+                tool: 'None',
+                upworkJobUrl: 'manual-entry'
+              });
+            } catch (jsError) {
+              this.log(id, 'warning', `⚠️ Failed to store in jobs_selected: ${jsError.message}`);
+            }
+          } catch (contentError) {
+            this.log(id, 'error', `❌ Content generation failed: ${contentError.message}`);
+            this.log(id, 'info', 'Continuing to next job...');
+          }
+
+          successfulRepos++;
+
+          // Store processed job to prevent duplicates
+          try {
+            await storage.storeProcessedJob({
+              id: `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
               title: jobEntry.title,
-              description: jobDescription,
+              description: jobEntry.description,
+              campaignId: id,
               niche: niche,
               platform: 'None',
               tool: 'None',
+              repoUrl: '',
               upworkJobUrl: 'manual-entry'
             });
-          } catch (jsError) {
-            this.log(id, 'warning', `⚠️ Failed to store in jobs_selected: ${jsError.message}`);
+
+            this.log(id, 'success', `💾 Job stored in database to prevent future duplicates`);
+          } catch (storeError) {
+            this.log(id, 'warning', `⚠️ Failed to store job in duplicate database: ${storeError.message}`);
           }
-        } catch (contentError) {
-          this.log(id, 'error', `❌ Content generation failed: ${contentError.message}`);
-          this.log(id, 'info', 'Continuing to next job...');
-        }
-        
-        successfulRepos++;
-        
-        // Store processed job to prevent duplicates
-        try {
-          await storage.storeProcessedJob({
-            id: `manual_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            title: jobEntry.title,
-            description: jobEntry.description,
-            campaignId: id,
+
+          // Record result
+          results.push({
+            jobTitle: jobEntry.title,
             niche: niche,
-            platform: 'None',
-            tool: 'None',
-            repoUrl: '',
-            upworkJobUrl: 'manual-entry'
+            timestamp: new Date().toISOString(),
+            status: 'success'
           });
-          
-          this.log(id, 'success', `💾 Job stored in database to prevent future duplicates`);
-        } catch (storeError) {
-          this.log(id, 'warning', `⚠️ Failed to store job in duplicate database: ${storeError.message}`);
+
+          // Update progress with successful repo count
+          const updatedProgress = {
+            processed,
+            total: campaign.scrapeJobUrls.length,
+            successfulRepos,
+            duplicates,
+            errors
+          };
+
+          // Save results and updated progress
+          await storage.updateScrapeJobsCampaign(id, {
+            results: results,
+            progress: updatedProgress
+          });
+          this.emit('progress', { campaignId: id, ...updatedProgress });
+
+          this.log(id, 'success', `📊 Progress: ${successfulRepos} repos / ${duplicates} duplicates / ${errors} errors`);
+
+        } catch (error) {
+          this.log(id, 'error', `❌ Failed to process job: ${error.message}`);
+          errors++;
+
+          // Record failed result
+          results.push({
+            jobText: jobText.substring(0, 100) + '...',
+            status: 'failed',
+            error: error.message,
+            timestamp: new Date().toISOString()
+          });
+
+          // Update progress with error count
+          const errorProgress = {
+            processed,
+            total: campaign.scrapeJobUrls.length,
+            successfulRepos,
+            duplicates,
+            errors
+          };
+
+          await storage.updateScrapeJobsCampaign(id, {
+            results: results,
+            progress: errorProgress
+          });
+          this.emit('progress', { campaignId: id, ...errorProgress });
         }
-        
-        // Record result
-        results.push({
-          jobTitle: jobEntry.title,
-          niche: niche,
-          timestamp: new Date().toISOString(),
-          status: 'success'
-        });
-        
-        // Update progress with successful repo count
-        const updatedProgress = {
-          processed,
-          total: campaign.scrapeJobUrls.length,
-          successfulRepos,
-          duplicates,
-          errors
-        };
-        
-        // Save results and updated progress
-        await storage.updateScrapeJobsCampaign(id, {
-          results: results,
-          progress: updatedProgress
-        });
-        this.emit('progress', { campaignId: id, ...updatedProgress });
-        
-        this.log(id, 'success', `📊 Progress: ${successfulRepos} repos / ${duplicates} duplicates / ${errors} errors`);
-        
-      } catch (error) {
-        this.log(id, 'error', `❌ Failed to process job: ${error.message}`);
-        errors++;
-        
-        // Record failed result
-        results.push({
-          jobText: jobText.substring(0, 100) + '...',
-          status: 'failed',
-          error: error.message,
-          timestamp: new Date().toISOString()
-        });
-        
-        // Update progress with error count
-        const errorProgress = {
-          processed,
-          total: campaign.scrapeJobUrls.length,
-          successfulRepos,
-          duplicates,
-          errors
-        };
-        
-        await storage.updateScrapeJobsCampaign(id, {
-          results: results,
-          progress: errorProgress
-        });
-        this.emit('progress', { campaignId: id, ...errorProgress });
-      }
-      
-      // Wait before next job (unless it's the last one)
-      if (i < campaign.scrapeJobUrls.length - 1 && this.running.get(id)) {
-        this.log(id, 'info', `⏸️ Waiting ${Math.round(campaign.delayBetweenRepos / 1000)}s before next job...`);
-        await this.delay(campaign.delayBetweenRepos);
-      }
-    }
-    
-    this.log(id, 'success', `\n✅ Campaign completed!`);
-    this.log(id, 'success', `   📊 Final stats:`);
-    this.log(id, 'success', `   - Total processed: ${processed}`);
-    this.log(id, 'success', `   - Repos created: ${successfulRepos}`);
-    this.log(id, 'success', `   - Duplicates skipped: ${duplicates}`);
-    this.log(id, 'success', `   - Errors: ${errors}`);
 
-    // Distinguish user stop from natural completion
-    if (this.stoppedByUser.has(id)) {
-      this.log(id, 'info', 'Campaign stopped by user');
+        // Wait before next job (unless it's the last one)
+        if (i < campaign.scrapeJobUrls.length - 1 && this.running.get(id)) {
+          this.log(id, 'info', `⏸️ Waiting ${Math.round(campaign.delayBetweenRepos / 1000)}s before next job...`);
+          await this.delay(campaign.delayBetweenRepos);
+        }
+      }
+
+      this.log(id, 'success', `\n✅ Campaign completed!`);
+      this.log(id, 'success', `   📊 Final stats:`);
+      this.log(id, 'success', `   - Total processed: ${processed}`);
+      this.log(id, 'success', `   - Repos created: ${successfulRepos}`);
+      this.log(id, 'success', `   - Duplicates skipped: ${duplicates}`);
+      this.log(id, 'success', `   - Errors: ${errors}`);
+
+      // Distinguish user stop from natural completion
+      if (this.stoppedByUser.has(id)) {
+        this.log(id, 'info', 'Campaign stopped by user');
+        this.stoppedByUser.delete(id);
+      } else {
+        await this.setStatus(id, 'Completed');
+      }
+
+    } catch (error) {
+      this.log(id, 'error', `Campaign failed: ${error.message}`);
+      await this.setStatus(id, 'Failed');
+    } finally {
+      this.running.delete(id);
       this.stoppedByUser.delete(id);
-    } else {
-      await this.setStatus(id, 'Completed');
     }
-
-  } catch (error) {
-    this.log(id, 'error', `Campaign failed: ${error.message}`);
-    await this.setStatus(id, 'Failed');
-  } finally {
-    this.running.delete(id);
-    this.stoppedByUser.delete(id);
   }
-}
 
 
   delay(ms) {

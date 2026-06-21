@@ -34,7 +34,10 @@ export function ensureDiscordBotRunning(options = {}) {
   const mainScript = path.join(botPath, 'main.py');
 
   if (!fs.existsSync(mainScript)) {
-    throw new Error(`Discord bot entry file not found: ${mainScript}`);
+    console.warn(`⚠️ Discord bot not found at: ${mainScript}`);
+    console.warn('⚠️ Campaign will run without Discord job scraping.');
+    console.warn('⚠️ To fix: clone the Python bot into that directory, then restart.');
+    return { started: false, reason: 'discord_bot_missing', pid: null };
   }
 
   const child = spawn(resolvePythonPath(), ['main.py'], {
@@ -80,3 +83,7 @@ export function stopDiscordBot() {
   botProcess = null;
   activeSearchSignature = '';
 }
+
+
+
+
