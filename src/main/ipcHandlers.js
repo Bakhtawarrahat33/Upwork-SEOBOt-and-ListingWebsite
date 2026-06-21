@@ -1,6 +1,27 @@
-import { ipcMain, app } from 'electron';
+import { createRequire } from 'module';
 import { storage } from '../services/storage.js';
 import { upworkCampaignManager } from '../services/upworkCampaignManager.js';
+import { ensureDiscordBotRunning } from '../services/discordBotRunner.js';
+
+const require = createRequire(import.meta.url);
+const { ipcMain, app } = require('electron');
+
+async function startCampaignDirect(id) {
+  const campaign = await storage.getUpworkCampaign(id);
+  if (!campaign) {
+    console.warn(`Campaign ${id} not found`);
+    return;
+  }
+  const botState = ensureDiscordBotRunning({
+    searchInput: campaign.upworkSearchInput,
+    keyword: campaign.name,
+    category: campaign.category,
+  });
+  // Discord is the sole job source. The local polling loop used to run alongside
+  // the Discord bridge, which duplicated job discovery and opened parallel GPT sessions.
+  await storage.updateUpworkCampaign(id, { status: 'Running' });
+  console.log(`Starting bridge campaign ${id}; Discord bot ${botState.started ? 'started' : 'already running'}`);
+}
 
 ipcMain.handle('app:get-info', async () => {
   return {
@@ -157,10 +178,12 @@ ipcMain.handle('upworkCampaigns:create', async (_event, payload) => {
 
 ipcMain.handle('upworkCampaigns:start', async (_event, { id }) => {
   try {
-    upworkCampaignManager.startCampaign(id).catch(error => {
-      console.error('Upwork campaign error:', error);
-    });
-    return { ok: true };
+    const campaign = await storage.getUpworkCampaign(id);
+    if (!campaign) {
+      return { ok: false, error: 'Campaign not found' };
+    }
+    await startCampaignDirect(id);
+    return { ok: true, active: true, queued: false };
   } catch (error) {
     console.error('Error starting Upwork campaign:', error);
     throw error;

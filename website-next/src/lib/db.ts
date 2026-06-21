@@ -7,11 +7,12 @@ const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD || '1234',
   database: process.env.DB_NAME || 'listing_site',
-  max: 3,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000,
-  query_timeout: 15000,
-  statement_timeout: 15000,
+  max: 10,
+  idleTimeoutMillis: 60000,
+  connectionTimeoutMillis: 30000,
+  query_timeout: 30000,
+  statement_timeout: 30000,
+  keepAlive: true,
 });
 
 pool.on('error', (err) => {

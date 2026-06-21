@@ -89,7 +89,7 @@ export default function ItemCard({ id, title, description, type, meta, date, top
   return (
     <Link
       href={`/${type}/${id}`}
-      className={`group relative flex flex-col justify-between h-full p-6 bg-white border border-slate-100 rounded-xl shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg ${config.borderHover}`}
+      className={`group relative flex flex-col justify-between h-full p-6 bg-white border border-slate-200/60 rounded-xl shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-lg ${config.borderHover}`}
     >
       <div className="absolute top-0 left-0 right-0 h-1 rounded-t-xl overflow-hidden">
         <div className={`h-full rounded-t-xl w-0 group-hover:w-full transition-all duration-300 ${config.accent}`} />
@@ -104,12 +104,12 @@ export default function ItemCard({ id, title, description, type, meta, date, top
           {date && <span>{date}</span>}
         </div>
 
-        <h3 className="mt-4 text-base font-bold text-slate-900 line-clamp-2 group-hover:text-blue-600 transition-colors duration-200">
+        <h3 className="mt-4 text-base font-semibold text-slate-900 line-clamp-2 min-h-[3rem] group-hover:text-blue-600 transition-colors duration-200">
           {title}
         </h3>
 
         {displayDescription ? (
-          <p className="mt-2 text-sm text-slate-500 line-clamp-3 leading-relaxed">
+          <p className="mt-2 text-sm text-gray-600 line-clamp-2">
             {displayDescription}
           </p>
         ) : (
@@ -121,37 +121,31 @@ export default function ItemCard({ id, title, description, type, meta, date, top
         )}
       </div>
 
-      <div className="mt-6 pt-4 border-t border-slate-100">
-        {(displayTopics.length > 0 || meta) && (
-          <div className="flex items-center justify-between">
-            {displayTopics.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {displayTopics.slice(0, 3).map((topic) => (
-                  <span
-                    key={topic}
-                    className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500"
-                  >
-                    {topic}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <span />
-            )}
-            {meta && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
-                {meta}
-              </span>
-            )}
+      <div className="mt-auto pt-4 border-t border-slate-50 flex flex-wrap items-center justify-between gap-1.5">
+        {displayTopics.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {displayTopics.slice(0, 3).map((topic) => (
+              <span
+                  key={topic}
+                  className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-500"
+                >
+                  {topic}
+                </span>
+            ))}
           </div>
+        ) : (
+          <span />
+        )}
+        {meta && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200">
+            {meta}
+          </span>
         )}
         {!displayTopics.length && !meta && (
-          <div className="flex items-center justify-end">
-            <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 opacity-0 translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200">
-              Read more
-              <ArrowRight className="w-3 h-3" />
-            </span>
-          </div>
+          <span className="inline-flex items-center gap-1 ml-auto text-xs font-medium text-blue-600 opacity-0 translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200">
+            Read more
+            <ArrowRight className="w-3 h-3" />
+          </span>
         )}
       </div>
     </Link>

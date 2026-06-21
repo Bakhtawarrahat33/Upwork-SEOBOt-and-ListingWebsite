@@ -32,7 +32,7 @@ export default async function ServicesPage() {
           <p className="text-gray-400 text-sm mt-1">Services will appear here once campaigns create them.</p>
         </div>
       ) : (
-        <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3 items-stretch">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
           {// eslint-disable-next-line @typescript-eslint/no-explicit-any
           services.map((service: any) => (
             <div key={service.id} className="animate-slideUp">

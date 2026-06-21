@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "dev:vite": "vite --config vite.renderer.config.ts",
-    "dev:electron": "cross-env VITE_DEV_SERVER_URL=http://localhost:5173 NODE_ENV=development electron .",
+    "dev:electron": "set \"ELECTRON_RUN_AS_NODE=\" && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 NODE_ENV=development electron .",
     "dev": "concurrently --kill-others-on-fail \"npm run dev:vite\" \"wait-on http://localhost:5173 && npm run dev:electron\"",
     "dev:renderer": "vite --config vite.renderer.config.ts",
     "dev:main": "node --enable-source-maps ./src/main/main.js",
@@ -16,7 +16,7 @@
     "build:dist": "npm run build && cross-env NODE_ENV=production electron-builder --config electron-builder.yml",
     "package": "cross-env NODE_ENV=production electron-builder --config electron-builder.yml",
     "lint": "eslint .",
-    "start": "electron ."
+    "start": "set \"ELECTRON_RUN_AS_NODE=\" && electron ."
   },
   "build": {
     "appId": "com.example.aiautomationdashboard",

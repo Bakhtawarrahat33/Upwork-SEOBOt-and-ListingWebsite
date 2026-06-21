@@ -1,6 +1,6 @@
 export default function Loading() {
   return (
-    <div className="space-y-16 animate-fadeIn">
+    <div className="space-y-12 animate-fadeIn">
       <section className="text-center py-16">
         <div className="mx-auto w-48 h-5 rounded-full bg-gray-100 animate-pulse mb-6" />
         <div className="mx-auto w-96 h-12 rounded-lg bg-gray-100 animate-pulse mb-4" />
@@ -13,15 +13,15 @@ export default function Loading() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="bg-white rounded-xl border border-gray-200 px-5 py-5">
+          <div key={i} className="bg-white rounded-xl border border-gray-200 p-6">
             <div className="w-16 h-8 rounded bg-gray-100 animate-pulse mb-2" />
-            <div className="w-24 h-3 rounded bg-gray-100 animate-pulse" />
+            <div className="w-24 h-4 rounded bg-gray-100 animate-pulse" />
           </div>
         ))}
       </div>
 
       <div className="grid lg:grid-cols-3 gap-10">
-        <div className="lg:col-span-2 space-y-14">
+        <div className="lg:col-span-2 space-y-12">
           {[...Array(4)].map((_, i) => (
             <section key={i}>
               <div className="flex items-center justify-between mb-6">

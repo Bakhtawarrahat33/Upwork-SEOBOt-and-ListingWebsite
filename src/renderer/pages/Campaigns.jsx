@@ -134,6 +134,12 @@ function CreateCampaignModal({ open, onClose, onSuccess, gptAccounts }) {
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
 
+  const defaultAccount = gptAccounts.length === 1 ? gptAccounts[0] : null;
+
+  useEffect(() => {
+    if (defaultAccount) setGptAccountId(defaultAccount.id);
+  }, [defaultAccount]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -144,10 +150,6 @@ function CreateCampaignModal({ open, onClose, onSuccess, gptAccounts }) {
     }
     if (!searchInput.trim()) {
       setError('Upwork search input is required');
-      return;
-    }
-    if (!gptAccountId) {
-      setError('Please select a GPT account');
       return;
     }
 
@@ -223,11 +225,21 @@ function CreateCampaignModal({ open, onClose, onSuccess, gptAccounts }) {
             {/* GPT Account */}
             <div>
               <label className="mb-2 block text-sm font-medium text-neutral-300">
-                GPT Account <span className="text-neutral-500">({gptAccounts.length} available)</span>
+                GPT Account
               </label>
               {gptAccounts.length === 0 ? (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-400">
                   No GPT accounts configured. Add one in Settings first.
+                </div>
+              ) : defaultAccount ? (
+                <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-4 py-2.5">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center text-white font-bold text-sm">
+                    {defaultAccount.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="text-white text-sm font-medium">{defaultAccount.name}</div>
+                    <div className="text-xs text-neutral-500">{defaultAccount.cookies?.length || 0} cookies</div>
+                  </div>
                 </div>
               ) : (
                 <select
@@ -244,10 +256,6 @@ function CreateCampaignModal({ open, onClose, onSuccess, gptAccounts }) {
                 </select>
               )}
             </div>
-
-
-
-
 
             {error && (
               <div className="rounded-lg bg-red-500/10 border border-red-500/50 p-3 text-sm text-red-400">

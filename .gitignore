@@ -20,6 +20,12 @@ gpt-timeout-*.png
 .env.local
 .env.production
 
+# Credential / session files
+cookies.json
+headers_upwork.json
+upwork_cookies.json
+seen_threads.json
+
 # Logs
 *.log
 npm-debug.log*

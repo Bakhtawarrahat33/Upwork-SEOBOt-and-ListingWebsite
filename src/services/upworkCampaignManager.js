@@ -5,10 +5,44 @@ import { fileURLToPath } from 'url';
 import { storage } from './storage.js';
 import { upworkJobService } from './upworkJobService.js';
 import { extractAndRepairJSON, normalizeJobFilterResponse } from '../utils/jsonRepairUtil.js';
+import puppeteer from 'puppeteer';
 
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function loadEnvFile() {
+  try {
+    const envPath = path.join(__dirname, '..', '..', 'upwork-discord-bot 3', 'upwork-discord-bot', '.env');
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf8');
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx === -1) continue;
+        const key = trimmed.slice(0, eqIdx).trim();
+        const value = trimmed.slice(eqIdx + 1).trim();
+        if (key.startsWith('CHATGPT_') || key === 'SHOW_GPT_BROWSER') process.env[key] = value;
+      }
+    }
+  } catch (e) {
+    console.warn('[env] Could not load .env:', e.message);
+  }
+}
+loadEnvFile();
+const showGPTBrowser = process.env.SHOW_GPT_BROWSER === 'true';
+
+function getChatGPTCredentials(accountName) {
+  const name = (accountName || '').toLowerCase();
+  if (name.includes('bakhtawar')) {
+    return { email: process.env.CHATGPT_EMAIL_BAKHTAWAR, password: process.env.CHATGPT_PASSWORD_BAKHTAWAR };
+  }
+  if (name.includes('fatima')) {
+    return { email: process.env.CHATGPT_EMAIL_FATIMA, password: process.env.CHATGPT_PASSWORD_FATIMA };
+  }
+  return null;
+}
 
 function loadPromptTemplate(filename) {
   try {
@@ -71,6 +105,17 @@ function getFallbackChatGPTProfileDir(gptAccountId = 'default') {
   return profileDir;
 }
 
+function getInstalledChromePath() {
+  const candidates = [
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  ];
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate));
+}
+
+const installedChromePath = getInstalledChromePath();
+
 async function launchPuppeteerWithProfileFallback(puppeteer, launchOptions, primaryProfileDir, fallbackProfileDir, logFn = console.warn) {
   try {
     return {
@@ -91,19 +136,18 @@ async function launchPuppeteerWithProfileFallback(puppeteer, launchOptions, prim
   }
 }
 
-async function launchBrowser(cookies, gptAccountId = 'default') {
-  console.log('   🔧 Launching Puppeteer browser...');
-  const puppeteer = (await import('puppeteer')).default;
+async function launchBrowser(cookies, gptAccountId = 'default', accountName) {
+  console.log('   🔧 Launching normal Chrome browser...');
   const launchOptions = {
-    protocolTimeout: 120000,
-    headless: false,
+    protocolTimeout: 300000,
+    timeout: 60000,
+    headless: !showGPTBrowser,
+    executablePath: installedChromePath,
     defaultViewport: { width: 1280, height: 800 },
     args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--window-position=0,0',
     ],
   };
   const launched = await launchPuppeteerWithProfileFallback(
@@ -115,24 +159,54 @@ async function launchBrowser(cookies, gptAccountId = 'default') {
   );
   const browser = launched.browser;
   const page = await browser.newPage();
-  await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-  );
-  if (cookies) {
+  let hasProfileSession = false;
+  try {
+    await page.goto('https://chatgpt.com', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const status = await checkChatGPTLoggedInWithCloudflareRetry(page, (msg) => console.warn(`   ${msg}`));
+    hasProfileSession = status === true;
+  } catch {
+    // sendPromptToChatGPT will retry navigation with the normal login checks.
+  }
+
+  if (cookies && !hasProfileSession) {
     const cookieArray = normalizeCookiesForContentGen(cookies);
     if (cookieArray.length > 0) {
       console.log(`🍪 Setting ${cookieArray.length} cookies for GPT session`);
       await page.setCookie(...cookieArray);
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      await page.goto('https://chatgpt.com', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+      const status = await checkChatGPTLoggedInWithCloudflareRetry(page, (msg) => console.warn(`   ${msg}`));
+      hasProfileSession = status === true;
     } else {
       console.warn('⚠️ No valid cookies to set after normalization');
     }
+  } else if (hasProfileSession) {
+    console.log('Using saved ChatGPT browser session instead of stored cookies');
   }
+
+  if (!hasProfileSession) {
+    const creds = getChatGPTCredentials(accountName || gptAccountId);
+    if (creds && creds.email && creds.password) {
+      console.log('🔑 Trying automated login with saved credentials...');
+      const ok = await autoLoginChatGPT(page, creds.email, creds.password, (msg) => console.log(msg));
+      if (ok) {
+        hasProfileSession = true;
+      }
+    }
+  }
+
   return { browser, page };
 }
 
 async function isStandaloneChatGPTLoggedIn(page) {
-  return await page.evaluate(() => {
+  const raw = await page.evaluate(() => {
     const text = document.body?.innerText || '';
+
+    const isCloudflareChallenge =
+      /checking your browser|verify you are human|cloudflare|ray id|just a moment/i.test(`${document.title || ''}\n${text}`) ||
+      !!document.querySelector('#challenge-form, .cf-browser-verification, [class*="cf-"]');
+    if (isCloudflareChallenge) return 'CLOUDFLARE';
+
     const composerSelector = [
       'textarea#prompt-textarea',
       '#prompt-textarea',
@@ -146,15 +220,164 @@ async function isStandaloneChatGPTLoggedIn(page) {
     const hasComposer = !!document.querySelector(composerSelector);
     const hasLoggedInShell = /new chat|search chats|library|projects|apps/i.test(text)
       && /ask anything|what are you working on|what.?s on your mind/i.test(text);
-    const hasLoginPrompt = /log in or sign up|continue with google|continue with apple|email address/i.test(text);
+    const hasAccountProfile = !!document.querySelector(
+      '[data-testid="accounts-profile-button"], [data-testid="profile-button"], button[aria-label*="Account" i]'
+    );
+    const hasLoginPrompt = /log in or sign up|sign up or log in to save chats|continue with google|continue with apple|email address/i.test(text);
     const onAuthRoute = /\/auth\/(login|signup)/.test(window.location.pathname);
 
-    return (hasComposer || hasLoggedInShell) && !hasLoginPrompt && !onAuthRoute;
+    return (hasComposer || hasLoggedInShell) && hasAccountProfile && !hasLoginPrompt && !onAuthRoute;
   });
+  if (raw === 'CLOUDFLARE') {
+    console.warn('⚠️ Cloudflare challenge detected on chatgpt.com — bot fingerprint detection active');
+    return false;
+  }
+  return raw;
 }
 
-async function waitForStandaloneChatGPTLogin(page, logFn, timeoutMs = 600000) {
+async function checkChatGPTLoggedInWithCloudflareRetry(page, logFn = console.warn) {
+  let result = await isStandaloneChatGPTLoggedIn(page);
+  if (result === false) {
+    logFn('⚠️ Not logged in or Cloudflare — waiting 10s and retrying...');
+    await new Promise(r => setTimeout(r, 10000));
+    result = await isStandaloneChatGPTLoggedIn(page);
+  }
+  return result;
+}
+
+async function autoLoginChatGPT(page, email, password, logFn) {
+  async function openLoginPage() {
+    await page.goto('https://chatgpt.com/auth/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
+  }
+  logFn('   🔑 Attempting automated ChatGPT login...');
+
+  try {
+    await openLoginPage();
+  } catch {}
+
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  const hasInvalidState = await page.evaluate(() => /invalid_state|sign-in session is no longer valid/i.test(document.body?.innerText || '')).catch(() => false);
+  if (hasInvalidState) {
+    logFn('   OpenAI login state expired. Clearing the automation profile auth state and retrying...');
+    const authCookies = await page.cookies('https://auth.openai.com', 'https://chatgpt.com').catch(() => []);
+    if (authCookies.length > 0) await page.deleteCookie(...authCookies).catch(() => {});
+    await page.evaluate(() => {
+      localStorage.clear();
+      sessionStorage.clear();
+    }).catch(() => {});
+    await openLoginPage().catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  async function findButtonByText(text) {
+    const buttons = await page.$$('button');
+    for (const button of buttons) {
+      const matches = await button.evaluate((element, searchText) => (
+        element.offsetParent !== null
+        && !element.disabled
+        && (element.textContent || '').toLowerCase().includes(searchText.toLowerCase())
+      ), text);
+      if (matches) return button;
+    }
+    return null;
+  }
+
+  const emailSelectors = [
+    'input[name="email"]', 'input[name="username"]', 'input[type="email"]', '#email',
+    'input[placeholder*="email" i]', 'input[autocomplete="email"]',
+    '[data-testid*="email" i] input', '[data-testid*="email" i]'
+  ];
+  // Current ChatGPT sometimes opens an intermediate page with a Login button.
+  const openedLogin = await page.evaluate(() => {
+    const candidates = Array.from(document.querySelectorAll('button, a'));
+    const launcher = candidates.find((element) => /^(log in|sign in|continue with email)$/i.test((element.textContent || '').trim()));
+    if (!launcher || launcher.offsetParent === null) return false;
+    launcher.click();
+    return true;
+  }).catch(() => false);
+  if (openedLogin) await new Promise(resolve => setTimeout(resolve, 2000));
+
+  let emailField = null;
+  for (const sel of emailSelectors) {
+    try { emailField = await page.waitForSelector(sel, { timeout: 3000 }); if (emailField) break; } catch {}
+  }
+  if (!emailField) {
+    for (const frame of page.frames()) {
+      for (const selector of emailSelectors) {
+        try { emailField = await frame.$(selector); if (emailField) break; } catch {}
+      }
+      if (emailField) break;
+    }
+  }
+  if (!emailField) { logFn('   ⚠️ Could not find email field'); return false; }
+
+  await emailField.click({ delay: 100 });
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await emailField.type(email, { delay: 30 });
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  let continueBtn = null;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    continueBtn = await findButtonByText('Continue');
+    if (continueBtn) break;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  if (continueBtn) {
+    try { await continueBtn.click(); } catch { try { await page.click('button[type="submit"]'); } catch {} }
+  } else {
+    try { await emailField.press('Enter'); } catch { try { await page.click('button[type="submit"]'); } catch {} }
+  }
+
+  await new Promise(resolve => setTimeout(resolve, 3000));
+
+  const passwordSelectors = ['input[name="password"]', 'input[type="password"]', '#password', 'input[placeholder*="password" i]', 'input[placeholder*="Password"]', 'input[autocomplete="current-password"]'];
+  let passField = null;
+  for (const sel of passwordSelectors) {
+    try { passField = await page.waitForSelector(sel, { timeout: 3000 }); if (passField) break; } catch {}
+  }
+  if (!passField) { logFn('   ⚠️ Could not find password field'); return false; }
+
+  await passField.click({ delay: 100 });
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await passField.type(password, { delay: 30 });
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  const signInBtn = await findButtonByText('Sign in') || await findButtonByText('Log in') || await findButtonByText('Continue');
+  if (signInBtn) {
+    try { await signInBtn.click(); } catch { try { await passField.press('Enter'); } catch {} }
+  } else {
+    try { await passField.press('Enter'); } catch { try { await page.click('button[type="submit"]'); } catch {} }
+  }
+
+  logFn('   ⏳ Waiting for ChatGPT to complete login...');
+  for (let i = 0; i < 30; i++) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    try {
+      if (await isStandaloneChatGPTLoggedIn(page)) { logFn('   ✅ Automated ChatGPT login successful!'); return true; }
+    } catch {}
+    try {
+      const errMsg = await page.evaluate(() => {
+        const text = document.body?.innerText || '';
+        return /incorrect|invalid.*password|wrong password|try again/i.test(text) ? text.substring(0, 200) : '';
+      });
+      if (errMsg) { logFn(`   ❌ Login error: ${errMsg}`); return false; }
+    } catch {}
+  }
+  logFn('   ⚠️ Auto-login timed out');
+  return false;
+}
+
+async function waitForStandaloneChatGPTLogin(page, logFn, timeoutMs = 600000, accountName) {
   if (await isStandaloneChatGPTLoggedIn(page)) return;
+
+  if (accountName) {
+    const creds = getChatGPTCredentials(accountName);
+    if (creds && creds.email && creds.password) {
+      const ok = await autoLoginChatGPT(page, creds.email, creds.password, logFn);
+      if (ok) return;
+    }
+  }
 
   logFn('   ChatGPT is not logged in. Log in in the opened browser window, then wait here.');
   const startedAt = Date.now();
@@ -165,15 +388,18 @@ async function waitForStandaloneChatGPTLogin(page, logFn, timeoutMs = 600000) {
       return;
     }
   }
-
   throw new Error('Not logged in to ChatGPT after waiting for manual login.');
 }
 
-async function sendPromptToChatGPT(page, prompt, logFn) {
-  logFn('   🌐 Navigating to ChatGPT...');
-  await page.goto('https://chatgpt.com', { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await sleep(10000);
-  await waitForStandaloneChatGPTLogin(page, logFn);
+async function sendPromptToChatGPT(page, prompt, logFn, accountName, skipNavigation = false) {
+  if (!skipNavigation) {
+    logFn('   🌐 Navigating to ChatGPT...');
+    await page.goto('https://chatgpt.com', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await sleep(5000);
+    await waitForStandaloneChatGPTLogin(page, logFn, 600000, accountName);
+  } else {
+    logFn('   💬 Using existing ChatGPT session...');
+  }
 
   const assistantCountBefore = await page.evaluate(() => {
     return document.querySelectorAll('[data-message-author-role="assistant"]').length;
@@ -253,7 +479,7 @@ async function sendPromptToChatGPT(page, prompt, logFn) {
 
   await sleep(5000);
 
-  const streamedResponseText = await waitForResponseComplete(page, 120000, logFn, assistantCountBefore);
+  const streamedResponseText = await waitForResponseComplete(page, 240000, logFn, assistantCountBefore);
 
   let responseText = await page.evaluate((previousAssistantCount) => {
     const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
@@ -288,12 +514,52 @@ async function waitForResponseComplete(page, timeoutMs = 120000, logFn, previous
 
   while (Date.now() - startTime < timeoutMs) {
     const status = await page.evaluate((assistantBaseline) => {
-      const stopButton = document.querySelector(
-        '[data-testid="stop-button"], ' +
-        'button[aria-label*="Stop" i]'
-      );
+      function findStopButton() {
+        return document.querySelector(
+          '[data-testid="stop-button"], ' +
+          'button[aria-label*="Stop" i], ' +
+          'button[aria-label*="stop" i], ' +
+          'button[class*="stop"]'
+        );
+      }
 
-      const assistantMessages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+      function findAllAssistantMessages() {
+        let msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
+        if (msgs.length > 0) return Array.from(msgs);
+        msgs = document.querySelectorAll('article[data-testid*="assistant"]');
+        if (msgs.length > 0) return Array.from(msgs);
+        const articles = document.querySelectorAll('article[data-testid^="conversation-turn"]');
+        const assistantArticles = Array.from(articles).filter(m =>
+          m.textContent && !m.querySelector('[data-message-author-role="user"]')
+        );
+        if (assistantArticles.length > 0) return assistantArticles;
+        const userMsgs = document.querySelectorAll('[data-message-author-role="user"]');
+        if (userMsgs.length > 0) {
+          const lastUser = userMsgs[userMsgs.length - 1];
+          const result = [];
+          let el = lastUser.nextElementSibling;
+          while (el) {
+            if (el.textContent && el.textContent.trim().length > 10) {
+              result.push(el);
+            }
+            el = el.nextElementSibling;
+          }
+          if (result.length > 0) return result;
+        }
+        const main = document.querySelector('main') || document.querySelector('[class*="chat"]') || document.querySelector('[class*="conversation"]');
+        if (main) {
+          const children = Array.from(main.children).filter(c =>
+            c.textContent && c.textContent.trim().length > 20 &&
+            !c.querySelector('textarea, [contenteditable]')
+          );
+          if (children.length > 0) return children;
+        }
+        return Array.from(msgs);
+      }
+
+      const stopButton = findStopButton();
+
+      const assistantMessages = findAllAssistantMessages();
       const newAssistantMessages = assistantMessages.slice(assistantBaseline);
       const lastMessage = newAssistantMessages[newAssistantMessages.length - 1];
 
@@ -313,7 +579,17 @@ async function waitForResponseComplete(page, timeoutMs = 120000, logFn, previous
         fullText: cleanText,
         preview: cleanText.substring(0, 100)
       };
-    });
+    }, assistantBaseline);
+
+    // Detect login redirect early
+    try {
+      const currentUrl = page.url();
+      if (currentUrl && /\/auth\/(login|signup)/.test(currentUrl)) {
+        throw new Error('GPT session redirected to login page — navigation detected');
+      }
+    } catch (urlErr) {
+      if (urlErr.message?.includes('redirected to login')) throw urlErr;
+    }
 
     if (status.responseText > 0) {
       latestResponseText = status.fullText;
@@ -346,7 +622,16 @@ async function waitForResponseComplete(page, timeoutMs = 120000, logFn, previous
     await new Promise(r => setTimeout(r, 2000));
   }
 
-  logFn('⚠️ Timeout waiting for response — proceeding with extraction');
+  logFn('⚠️ Timeout waiting for response — saving debug info and proceeding with extraction');
+  try {
+    logFn(`📍 Current URL: ${page.url()}`);
+    await page.screenshot({ path: `gpt-timeout-${Date.now()}.png` });
+    const chatHtml = await page.evaluate(() => {
+      const main = document.querySelector('main') || document.querySelector('[class*="chat"]') || document.querySelector('[class*="conversation"]') || document.body;
+      return main.innerHTML.substring(0, 20000);
+    });
+    fs.writeFileSync(`gpt-debug-dom-${Date.now()}.html`, chatHtml);
+  } catch (e) {}
   return latestResponseText;
 }
 
@@ -462,12 +747,23 @@ async function retryAsync(fn, options = {}) {
   throw lastError;
 }
 
-async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, gptAccountId, logFn, shouldAbort, jobSkills, jobBudget }) {
+async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, gptAccountId, logFn, shouldAbort, jobSkills, jobBudget, existingBrowser, existingPage, sendPrompt }) {
   logFn(`\n${'='.repeat(60)}`);
   logFn(`🔄 PIPELINE START: ${jobTitle}`);
   logFn(`${'='.repeat(60)}`);
 
-  const { browser, page } = await launchBrowser(cookies, gptAccountId);
+  const reuseSession = !!(existingBrowser && existingPage);
+  let accountName = gptAccountId;
+  try {
+    const account = await storage.getGPTAccount(gptAccountId);
+    if (account && account.name) accountName = account.name;
+  } catch {}
+  const { browser, page } = reuseSession
+    ? { browser: existingBrowser, page: existingPage }
+    : await launchBrowser(cookies, gptAccountId, accountName);
+  const send = sendPrompt || ((prompt, skipNavigation) => (
+    sendPromptToChatGPT(page, prompt, logFn, accountName, skipNavigation)
+  ));
 
   const result = {
     product: null,
@@ -498,7 +794,7 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, g
           const productPrompt = fillPrompt(productPromptRaw, templateVars);
           logFn(`[1/3] ✍️ Sending prompt to ChatGPT...`);
           const productResponse = await retryAsync(
-            () => sendPromptToChatGPT(page, productPrompt, logFn),
+            () => send(productPrompt, reuseSession),
             { maxRetries: 1, baseDelay: 3000 }
           );
           logFn(`[1/3] 🔍 Parsing product response...`);
@@ -549,7 +845,7 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, g
           const blogPrompt = fillPrompt(blogPromptRaw, templateVars);
           logFn(`[2/3] ✍️ Sending prompt to ChatGPT...`);
           const blogResponse = await retryAsync(
-            () => sendPromptToChatGPT(page, blogPrompt, logFn),
+            () => send(blogPrompt, true),
             { maxRetries: 1, baseDelay: 3000 }
           );
           logFn(`[2/3] 🔍 Parsing blog response...`);
@@ -599,7 +895,7 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, g
           const servicePrompt = fillPrompt(servicePromptRaw, templateVars);
           logFn(`[3/3] ✍️ Sending prompt to ChatGPT...`);
           const serviceResponse = await retryAsync(
-            () => sendPromptToChatGPT(page, servicePrompt, logFn),
+            () => send(servicePrompt, true),
             { maxRetries: 1, baseDelay: 3000 }
           );
           logFn(`[3/3] 🔍 Parsing service response...`);
@@ -639,6 +935,16 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, g
       logFn(`[3/3] ⏭️ Service prompt missing — skipping`);
     }
 
+    if (!(result.product && result.blog && result.service)) {
+      logFn('\nIncomplete content set generated. Rolling back partial content.');
+      await Promise.all([
+        result.product ? storage.deleteProduct(result.product.id).catch(() => {}) : Promise.resolve(),
+        result.blog ? storage.deleteBlogPost(result.blog.id).catch(() => {}) : Promise.resolve(),
+        result.service ? storage.deleteService(result.service.id).catch(() => {}) : Promise.resolve(),
+      ]);
+      throw new Error('Incomplete content set: product, blog, and service are all required');
+    }
+
     if (hasAnySuccess) {
       logFn(`\n✅ ===== CONTENT GENERATION COMPLETE =====`);
       if (result.productParsed) logFn(`   📦 Product: ${result.productParsed.title}`);
@@ -654,7 +960,9 @@ async function generateForJob({ jobTitle, jobDescription, cookies, campaignId, g
     console.error(`[CONTENT GENERATOR ERROR]`, error.stack);
     throw error;
   } finally {
-    await browser.close();
+    if (!reuseSession) {
+      await browser.close();
+    }
     logFn(`🏁 Pipeline finished for: ${jobTitle}`);
   }
 }
@@ -679,8 +987,295 @@ class UpworkCampaignManager extends EventEmitter {
     this.failureCounts = new Map(); // campaignId -> consecutive failure count
     this.circuitBreakerThreshold = 5; // Pause campaign after 5 consecutive failures
     this.invalidGptAccounts = new Set(); // GPT accounts with invalid cookies
+    this._browserLocks = {}; // Per-campaign mutex for concurrent Bridge API operations
+    this.bridgeJobQueueTail = Promise.resolve();
+    this.bridgeQueueDepth = 0;
     this.loadPrompts();
     console.log('UpworkCampaignManager initialized');
+  }
+
+  processSingleJob(jobData, source = 'bridge') {
+    const jobId = jobData.id || jobData.url || `bridge_${Date.now()}`;
+    const title = jobData.title || 'Unknown Job';
+    const queuePosition = this.bridgeQueueDepth + 1;
+    this.bridgeQueueDepth += 1;
+
+    const task = this.bridgeJobQueueTail
+      .catch((error) => console.error('Previous bridge job failed:', error))
+      .then(() => this._processSingleJob(jobData, source));
+
+    // Keep the queue alive after a failed job, so later jobs are never blocked.
+    this.bridgeJobQueueTail = task.catch((error) => {
+      console.error(`Queued bridge job failed: ${title}`, error);
+    });
+
+    task.then(
+      (result) => console.log(`Bridge queue completed "${title}": ${result.status}`),
+      (error) => console.error(`Bridge queue failed "${title}":`, error)
+    ).finally(() => {
+      this.bridgeQueueDepth = Math.max(0, this.bridgeQueueDepth - 1);
+    });
+
+    console.log(`Bridge job queued (${queuePosition}): "${title}"`);
+    return { status: 'queued', queue_position: queuePosition, job_id: jobId, title };
+  }
+
+  async _processSingleJob(jobData, source = 'bridge') {
+    const jobId = jobData.id || jobData.url || `bridge_${Date.now()}`;
+    const title = jobData.title || 'Unknown Job';
+    const campaign = await this._findCampaignForJob(jobData.keyword, jobData.category);
+
+    if (!campaign) {
+      console.log(`No campaign found for keyword="${jobData.keyword}" category="${jobData.category}"`);
+      return { status: 'no_campaign', job_id: jobData.id, title };
+    }
+
+    const id = campaign.id;
+    const channelInfo = jobData.discord_channel_id
+      ? ` channel_id=${jobData.discord_channel_id}${jobData.discord_channel_name ? ` (${jobData.discord_channel_name})` : ''}`
+      : '';
+    this.log(id, 'info', `Bridge received job: "${title}" (source: ${source})${channelInfo}`);
+
+    let cookies;
+    try {
+      cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+    } catch (error) {
+      this.log(id, 'error', `Cannot process bridge job: ${error.message}`);
+      return { status: 'error', error: error.message, job_id: jobData.id, title };
+    }
+
+    try {
+      const idDuplicate = jobId ? await storage.checkDuplicateByJobId(jobId) : null;
+      if (idDuplicate) {
+        this.log(id, 'warning', `Duplicate by job ID: ${jobId}`);
+        return { status: 'duplicate', job_id: jobData.id, title, existing: idDuplicate };
+      }
+
+      const titleDuplicate = await storage.checkJobDuplicate(jobData.title, jobData.description || '', 0.85);
+      if (titleDuplicate) {
+        this.log(id, 'warning', `Duplicate by title: "${title}"`);
+        return { status: 'duplicate', job_id: jobData.id, title, existing: titleDuplicate };
+      }
+    } catch (error) {
+      this.log(id, 'warning', `Duplicate check failed: ${error.message}`);
+    }
+
+    const jobForFilter = {
+      title: jobData.title,
+      description: jobData.description || '',
+      skills: Array.isArray(jobData.skills) ? jobData.skills : (jobData.skills ? [jobData.skills] : []),
+      budget: jobData.budget || 'Not specified',
+      url: jobData.url || '',
+      id: jobData.id || '',
+      ciphertext: jobData.id || '',
+    };
+
+    const jobDescription = upworkJobService.buildJobDescription(jobForFilter);
+
+    // Profiles are per GPT account, not per campaign. Serializing on the account
+    // prevents two campaigns from typing into the same ChatGPT session at once.
+    return this._withExclusiveBrowser(`gpt:${campaign.gptAccountId || id}`, async () => {
+    // Create shared browser for both filter and content generation
+    let sharedBrowser = null;
+    let sharedPage = null;
+    let filterResult;
+
+    try {
+      this.log(id, 'info', 'Launching shared ChatGPT session for filter + content generation...');
+      const launched = await this.launchChatGPTBrowser(
+        campaign.gptAccountId,
+        id
+      );
+      sharedBrowser = launched.browser;
+      sharedPage = launched.page;
+      this.activeBrowsers.set(id, sharedBrowser);
+
+      // Navigate and set up session once
+      await this.navigateToChatGPT(sharedPage, id);
+      const profileHasSession = await this.checkChatGPTLoggedInWithRetry(sharedPage);
+      const sanitizedCookies = profileHasSession ? [] : this.sanitizeCookies(cookies);
+      if (profileHasSession) {
+        this.log(id, 'info', 'Using saved ChatGPT browser session.');
+      }
+      if (sanitizedCookies.length > 0) {
+        await sharedPage.setCookie(...sanitizedCookies);
+        await this.navigateToChatGPT(sharedPage, id);
+      }
+      sharedPage = await this.ensureChatGPTSession(sharedPage, id, campaign.gptAccountId);
+
+      // Filter (no retry — uses existing browser for speed)
+      this.log(id, 'info', 'Checking job viability with GPT...');
+      // Diagnosis reference: SELECTOR_PROMPT_INPUT and SELECTOR_STOP_BUTTON
+      // in diagnosis.md. A stuck conversation is reset before the one retry.
+      filterResult = await this.retryWithBackoff(
+        () => this._filterJobWithGPTInternal(
+          jobForFilter, cookies, id, campaign.gptAccountId, sharedPage, sharedBrowser
+        ),
+        {
+          maxRetries: 1,
+          baseDelay: 3000,
+          shouldRetry: (error) => !/cloudflare|challenge page/i.test(error?.message || ''),
+          onRetry: async (attempt, delay, error) => {
+            this.log(id, 'warning', `GPT viability retry ${attempt}/1 after ${delay}ms: ${error.message}`);
+            await this.startNewChat(sharedPage, (message) => this.log(id, 'info', message));
+          }
+        }
+      );
+    } catch (error) {
+      this.log(id, 'error', `GPT viability check failed: ${error.message}`);
+      // B: Auth recovery — try refreshing cookies on auth errors
+      if (this.isChatGPTAuthError(error)) {
+        try {
+          this.log(id, 'warning', 'Auth error during filter — refreshing GPT session...');
+          await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
+          cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+        } catch (refreshError) {
+          this.log(id, 'error', `Cookie refresh failed: ${refreshError.message}`);
+        }
+      }
+      if (sharedBrowser) {
+        await sharedBrowser.close().catch(() => {});
+        this.activeBrowsers.delete(id);
+      }
+      return { status: 'error', error: error.message, job_id: jobData.id, title };
+    }
+
+    if (!filterResult.viable) {
+      this.log(id, 'warning', `Job rejected by GPT: ${filterResult.reason || 'Not viable'}`);
+      await storage.storeProcessedJob({
+        id: jobId,
+        title: jobData.title,
+        description: jobData.description || '',
+        campaignId: id,
+        niche: filterResult.niche || 'Other',
+        platform: filterResult.platform || 'None',
+        tool: filterResult.tool || 'None',
+        repoUrl: '',
+        upworkJobUrl: jobData.url || '',
+        viable: false,
+        rejectionReason: filterResult.reason || 'GPT filter rejected',
+      }).catch((error) => this.log(id, 'warning', `Failed to store rejected job: ${error.message}`));
+      if (sharedBrowser) {
+        await sharedBrowser.close().catch(() => {});
+        this.activeBrowsers.delete(id);
+      }
+      return { status: 'rejected', job_id: jobData.id, title, reason: filterResult.reason || 'Not viable' };
+    }
+
+    this.log(id, 'success', `Job viable: ${filterResult.platform || 'unknown platform'} / ${filterResult.tool || 'unknown tool'}`);
+
+    let contentResult;
+    try {
+      contentResult = await generateForJob({
+        jobTitle: jobData.title,
+        jobDescription,
+        cookies,
+        campaignId: id,
+        gptAccountId: campaign.gptAccountId,
+        logFn: (msg) => this.log(id, 'info', msg),
+        shouldAbort: () => false,
+        jobSkills: Array.isArray(jobData.skills) ? jobData.skills.join(', ') : (jobData.skills || 'Not specified'),
+        jobBudget: jobData.budget || 'Not specified',
+        existingBrowser: sharedBrowser,
+        existingPage: sharedPage,
+        sendPrompt: (prompt) => this.sendPromptAndReadGPTResponse(sharedPage, prompt, id),
+      });
+    } catch (error) {
+      this.log(id, 'error', `Content generation failed: ${error.message}`);
+      // B: Auth recovery — try refreshing cookies on auth errors
+      if (this.isChatGPTAuthError(error)) {
+        try {
+          this.log(id, 'warning', 'Auth error during content gen — refreshing GPT session...');
+          await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
+          cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+        } catch (refreshError) {
+          this.log(id, 'error', `Cookie refresh failed: ${refreshError.message}`);
+        }
+      }
+      if (sharedBrowser) {
+        await sharedBrowser.close().catch(() => {});
+        this.activeBrowsers.delete(id);
+      }
+      return { status: 'error', error: error.message, job_id: jobData.id, title };
+    } finally {
+      if (sharedBrowser) {
+        await sharedBrowser.close().catch(() => {});
+        this.activeBrowsers.delete(id);
+      }
+    }
+
+    await storage.createJobsSelected({
+      campaignId: id,
+      title: jobData.title,
+      description: jobDescription,
+      niche: filterResult.niche || 'Other',
+      platform: filterResult.platform || 'None',
+      tool: filterResult.tool || 'None',
+      upworkJobUrl: jobData.url || '',
+    }).catch((error) => this.log(id, 'warning', `Failed to store selected job: ${error.message}`));
+
+    await storage.storeProcessedJob({
+      id: jobId,
+      title: jobData.title,
+      description: jobData.description || '',
+      campaignId: id,
+      niche: filterResult.niche || 'Other',
+      platform: filterResult.platform || 'None',
+      tool: filterResult.tool || 'None',
+      repoUrl: '',
+      upworkJobUrl: jobData.url || '',
+      viable: true,
+    }).catch((error) => this.log(id, 'warning', `Failed to store processed job: ${error.message}`));
+
+    return {
+      status: 'success',
+      job_id: jobData.id,
+      campaign_id: id,
+      title,
+      viability: {
+        viable: true,
+        niche: filterResult.niche,
+        platform: filterResult.platform,
+        tool: filterResult.tool,
+      },
+      content: {
+        product: { id: contentResult.product.id, title: contentResult.productParsed.title },
+        blog: { id: contentResult.blog.id, title: contentResult.blogParsed.title },
+        service: { id: contentResult.service.id, title: contentResult.serviceParsed.title },
+      },
+    };
+    }); // end _withExclusiveBrowser
+  }
+
+  async _findCampaignForJob(keyword, category) {
+    const campaigns = await storage.getUpworkCampaigns();
+    if (!campaigns || campaigns.length === 0) return null;
+
+    // Only a deliberately started campaign may consume jobs from Discord.
+    // This prevents stopped test campaigns with matching keywords from taking work.
+    const activeCampaigns = campaigns.filter((campaign) => (
+      String(campaign.status || '').toLowerCase() === 'running'
+    ));
+    if (activeCampaigns.length === 0) return null;
+
+    const normalize = (value) => String(value || '').toLowerCase();
+    const kw = normalize(keyword);
+    const cat = normalize(category);
+
+    if (kw) {
+      const exact = activeCampaigns.find((campaign) => normalize(campaign.upworkSearchInput).includes(kw));
+      if (exact) return exact;
+
+      const byName = activeCampaigns.find((campaign) => normalize(campaign.name).includes(kw));
+      if (byName) return byName;
+    }
+
+    if (cat) {
+      const byCategory = activeCampaigns.find((campaign) => normalize(campaign.name).includes(cat));
+      if (byCategory) return byCategory;
+    }
+
+    return activeCampaigns[0];
   }
 
   /**
@@ -704,7 +1299,7 @@ class UpworkCampaignManager extends EventEmitter {
         if (!shouldRetry(error)) break;
         if (attempt === maxRetries) break;
         const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
-        onRetry(attempt + 1, delay, error);
+        await onRetry(attempt + 1, delay, error);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -735,7 +1330,7 @@ class UpworkCampaignManager extends EventEmitter {
   }
 
   isChatGPTAuthError(error) {
-    return /not logged in to chatgpt|update gpt account cookies|cookies marked invalid/i.test(error?.message || '');
+    return /not logged in to chatgpt|update gpt account cookies|cookies marked invalid|session.*expired|unauthorized|login required/i.test(error?.message || '');
   }
 
   /**
@@ -879,15 +1474,42 @@ class UpworkCampaignManager extends EventEmitter {
     ].join(', ');
   }
 
+  async hasInvalidOpenAIState(page) {
+    return page.evaluate(() => (
+      /invalid_state|session (is )?no longer valid|session ended/i.test(document.body?.innerText || '')
+    )).catch(() => false);
+  }
+
+  async clearChatGPTAuthState(page) {
+    const cookies = await page.cookies('https://chatgpt.com', 'https://auth.openai.com').catch(() => []);
+    if (cookies.length > 0) await page.deleteCookie(...cookies).catch(() => {});
+    await page.evaluate(() => {
+      localStorage.clear();
+      sessionStorage.clear();
+    }).catch(() => {});
+  }
+
   async navigateToChatGPT(page, campaignId) {
     try {
       await page.goto('https://chatgpt.com/', {
+        // ChatGPT keeps long-lived connections open, so network-idle can hang.
         waitUntil: 'domcontentloaded',
         timeout: 90000
       });
     } catch (error) {
       if (!/timeout/i.test(error.message || '')) throw error;
       this.log(campaignId, 'warning', 'ChatGPT navigation was slow, continuing with the loaded page.');
+    }
+
+    // Wait for SPA to settle and check for stale session
+    await page.waitForFunction(() => document.body && document.readyState !== 'loading', { timeout: 30000 }).catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    if (await this.hasInvalidOpenAIState(page)) {
+      this.log(campaignId, 'warning', 'Stale OpenAI session detected. Clearing browser auth state and redirecting to login.');
+      await this.clearChatGPTAuthState(page);
+      await page.goto('https://chatgpt.com/auth/login', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
 
     await page.waitForFunction(() => document.body && document.readyState !== 'loading', { timeout: 30000 }).catch(() => {});
@@ -921,69 +1543,75 @@ class UpworkCampaignManager extends EventEmitter {
     }, selector);
   }
 
+  async startNewChat(page, logFn) {
+    logFn('Starting a clean ChatGPT conversation before retrying...');
+
+    const clicked = await page.evaluate(() => {
+      const candidates = Array.from(document.querySelectorAll('button, a'));
+      const newChat = candidates.find((element) => (
+        /new chat/i.test((element.textContent || '').trim())
+        && element.getBoundingClientRect().width > 0
+        && element.getBoundingClientRect().height > 0
+      ));
+      if (!newChat) return false;
+      newChat.click();
+      return true;
+    });
+
+    if (!clicked) {
+      await page.goto('https://chatgpt.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    }
+
+    await page.waitForFunction(() => (
+      Array.from(document.querySelectorAll('button')).some((element) => (
+        /^clear chat$/i.test((element.textContent || '').trim()) && element.offsetParent !== null
+      ))
+    ), { timeout: 5000 }).catch(() => {});
+    const cleared = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button'));
+      const confirm = buttons.find((element) => /^clear chat$/i.test((element.textContent || '').trim()));
+      if (!confirm || confirm.offsetParent === null) return false;
+      confirm.click();
+      return true;
+    });
+    if (cleared) logFn('Confirmed the ChatGPT clear-chat dialog.');
+
+    const selector = await this.waitForChatGPTComposer(page);
+    await page.waitForFunction((composerSelector) => {
+      const composer = Array.from(document.querySelectorAll(composerSelector)).find((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      return composer && !(composer.value || composer.textContent || composer.innerText || '').trim();
+    }, { timeout: 15000 }, selector).catch(() => {});
+  }
+
   /**
    * Send prompt using clipboard paste method (most reliable)
    */
   async sendPromptToGPT(page, prompt, logFn) {
-    logFn(`📤 Preparing to send prompt...`);
-    
-    try {
-      // Method 1: Use clipboard paste (most reliable for long text)
-      logFn(`⌨️ Using clipboard paste method...`);
-      
-      // Copy prompt to clipboard
-      await page.evaluate((text) => {
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textArea);
-      }, prompt);
-      
-      const textareaSelector = await this.waitForChatGPTComposer(page);
-      await this.focusChatGPTComposer(page, textareaSelector);
-      
-      // Wait a moment
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Paste using keyboard shortcut
-      await page.keyboard.down('Control');
-      await page.keyboard.press('KeyV');
-      await page.keyboard.up('Control');
-      
-      logFn(`✅ Prompt pasted successfully`);
-      
-      // Wait for the text to appear
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Verify the text was pasted
-      const textContent = await page.evaluate((selector) => {
-        const textarea = Array.from(document.querySelectorAll(selector)).find((candidate) => {
-          const rect = candidate.getBoundingClientRect();
-          const style = window.getComputedStyle(candidate);
-          return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-        });
-        return textarea ? (textarea.value || textarea.textContent || textarea.innerText) : '';
-      }, textareaSelector);
-      
-      if (textContent.length < prompt.length * 0.9) {
-        logFn(`⚠️ Clipboard paste may have failed, trying direct DOM method...`);
-        await this.sendPromptDirectDOM(page, prompt, textareaSelector);
-      }
-      
-    } catch (error) {
-      logFn(`⚠️ Clipboard method failed: ${error.message}, trying direct DOM method...`);
-      const textareaSelector = await this.waitForChatGPTComposer(page);
-      await this.sendPromptDirectDOM(page, prompt, textareaSelector);
-    }
-    
+    logFn(`Preparing to send prompt...`);
+    logFn(`Using direct DOM method...`);
+    const textareaSelector = await this.waitForChatGPTComposer(page);
+    await this.sendPromptDirectDOM(page, prompt, textareaSelector);
+    logFn(`Prompt entered successfully`);
+    const userMessageCountBefore = await page.evaluate(() => (
+      document.querySelectorAll('[data-message-author-role="user"]').length
+    ));
+
     // Wait a moment for the text to be processed
     await new Promise(resolve => setTimeout(resolve, 1000));
     
     // Find and click send button
     logFn(`📤 Sending message...`);
-    const sendButtonSelector = 'button[data-testid="send-button"], button[aria-label*="Send"]';
+    const sendButtonSelector = [
+      'button[data-testid="send-button"]',
+      'button[aria-label*="Send"]',
+      'button[data-testid="fruitfly-send-button"]',
+      'button:has(svg.lucide-send)',
+      'button svg[aria-label*="Send"]',
+      'button.absolute.bottom-3',
+    ].join(', ');
     
     try {
       await page.waitForFunction((selector) => {
@@ -1012,6 +1640,32 @@ class UpworkCampaignManager extends EventEmitter {
     }
     
     logFn(`✅ Message sent`);
+    const submitted = await page.waitForFunction((previousCount) => (
+      document.querySelectorAll('[data-message-author-role="user"]').length > previousCount
+    ), { timeout: 20000 }, userMessageCountBefore).then(() => true).catch(() => false);
+
+    if (!submitted) {
+      throw new Error('ChatGPT did not accept the prompt after send.');
+    }
+  }
+
+  async sendPromptAndReadGPTResponse(page, prompt, campaignId) {
+    const assistantBaseline = await page.evaluate(() => (
+      document.querySelectorAll('[data-message-author-role="assistant"]').length
+    ));
+
+    await this.sendPromptToGPT(page, prompt, (message) => this.log(campaignId, 'info', message));
+    await this.waitForGPTResponse(page, (message) => this.log(campaignId, 'info', message), {
+      maxStableChecks: 3,
+      checkInterval: 1500,
+      minLength: 50,
+      overallTimeoutMs: 120000,
+      assistantBaseline,
+    });
+
+    const response = await this.extractGPTResponse(page, assistantBaseline);
+    if (!response) throw new Error('ChatGPT returned an empty response.');
+    return response;
   }
 
   /**
@@ -1059,8 +1713,8 @@ class UpworkCampaignManager extends EventEmitter {
   async waitForGPTResponse(page, logFn, a = 5, b = 2000, c = 50) {
     // Support old positional args or new options object
     const opts = typeof a === 'object'
-      ? { maxStableChecks: 5, checkInterval: 2000, minLength: 50, overallTimeoutMs: 120000, resendOnIdleMs: 15000, ...a }
-      : { maxStableChecks: a, checkInterval: b, minLength: c, overallTimeoutMs: 120000, resendOnIdleMs: 15000 };
+      ? { maxStableChecks: 5, checkInterval: 2000, minLength: 50, overallTimeoutMs: 240000, resendOnIdleMs: 15000, initialResponseTimeoutMs: 30000, assistantBaseline: 0, ...a }
+      : { maxStableChecks: a, checkInterval: b, minLength: c, overallTimeoutMs: 240000, resendOnIdleMs: 15000, initialResponseTimeoutMs: 30000, assistantBaseline: 0 };
 
     let previousLength = 0;
     let stableCount = 0;
@@ -1074,23 +1728,93 @@ class UpworkCampaignManager extends EventEmitter {
       // Timeout guard
       const elapsed = Date.now() - start;
       if (elapsed > opts.overallTimeoutMs) {
-        logFn(`⏱️ Timeout waiting for response (~${Math.round(opts.overallTimeoutMs/1000)}s). Proceeding with current content.`);
-        break;
+        await page.evaluate(() => {
+          const stopButton = document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop" i]');
+          stopButton?.click();
+        }).catch(() => {});
+        throw new Error(`GPT response timed out after ${Math.round(opts.overallTimeoutMs / 1000)}s without a usable reply.`);
       }
 
       await new Promise(resolve => setTimeout(resolve, opts.checkInterval));
 
-      const state = await page.evaluate(() => {
-        const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
-        const last = messages.length > 0 ? messages[messages.length - 1] : null;
+      const state = await page.evaluate((assistantBaseline) => {
+        function findAllAssistantMessages() {
+          let msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
+          if (msgs.length > 0) return Array.from(msgs);
+          msgs = document.querySelectorAll('article[data-testid*="assistant"]');
+          if (msgs.length > 0) return Array.from(msgs);
+          const articles = document.querySelectorAll('article[data-testid^="conversation-turn"]');
+          const assistantArticles = Array.from(articles).filter(m =>
+            m.textContent && !m.querySelector('[data-message-author-role="user"]')
+          );
+          if (assistantArticles.length > 0) return assistantArticles;
+          const userMsgs = document.querySelectorAll('[data-message-author-role="user"]');
+          if (userMsgs.length > 0) {
+            const lastUser = userMsgs[userMsgs.length - 1];
+            const result = [];
+            let el = lastUser.nextElementSibling;
+            while (el) {
+              if (el.textContent && el.textContent.trim().length > 10) {
+                result.push(el);
+              }
+              el = el.nextElementSibling;
+            }
+            if (result.length > 0) return result;
+          }
+          const main = document.querySelector('main') || document.querySelector('[class*="chat"]') || document.querySelector('[class*="conversation"]');
+          if (main) {
+            const children = Array.from(main.children).filter(c =>
+              c.textContent && c.textContent.trim().length > 20 &&
+              !c.querySelector('textarea, [contenteditable]')
+            );
+            if (children.length > 0) return children;
+          }
+          return Array.from(msgs);
+        }
+
+        function findIsGenerating() {
+          return !!(
+            document.querySelector('[data-testid="stop-button"]') ||
+            document.querySelector('button[aria-label*="Stop" i]') ||
+            document.querySelector('button[aria-label*="stop" i]') ||
+            document.querySelector('button[class*="stop"]')
+          );
+        }
+
+        function findHasRegenerate() {
+          return !!(
+            document.querySelector('[data-testid="regenerate-button"]') ||
+            document.querySelector('button[aria-label*="Regenerate" i]') ||
+            document.querySelector('button[aria-label*="regenerate" i]')
+          );
+        }
+
+        const messages = findAllAssistantMessages();
+        const newMessages = messages.slice(assistantBaseline);
+        const last = newMessages.length > 0 ? newMessages[newMessages.length - 1] : null;
         const length = last ? (last.textContent?.length || 0) : 0;
-        const isGenerating = !!(
-          document.querySelector('[data-testid="stop-button"]') ||
-          document.querySelector('button[aria-label*="Stop" i]')
+        const isGenerating = findIsGenerating();
+        const hasRegenerate = findHasRegenerate();
+        const pageText = document.body?.innerText || '';
+        const challengeActive = /just a moment|checking your browser|verify you are human|cloudflare/i.test(
+          `${document.title || ''}\n${pageText}`
         );
-        const hasRegenerate = !!document.querySelector('[data-testid="regenerate-button"], button:has(svg[aria-label*="Regenerate"])');
-        return { length, isGenerating, hasRegenerate };
-      });
+        return { length, isGenerating, hasRegenerate, challengeActive };
+      }, opts.assistantBaseline);
+
+      if (state.challengeActive) {
+        throw new Error('ChatGPT is on a Cloudflare/OpenAI challenge page and cannot return a response.');
+      }
+
+      // Detect login redirect early instead of waiting for timeout
+      try {
+        const currentUrl = page.url();
+        if (currentUrl && /\/auth\/(login|signup)/.test(currentUrl)) {
+          throw new Error('GPT session redirected to login page — navigation detected');
+        }
+      } catch (urlErr) {
+        if (urlErr.message?.includes('redirected to login')) throw urlErr;
+      }
 
       // Consider finished if generation stopped and we have meaningful content
       if (!state.isGenerating && state.length > opts.minLength) {
@@ -1116,13 +1840,29 @@ class UpworkCampaignManager extends EventEmitter {
         previousLength = state.length;
       }
 
+      // ChatGPT can leave an empty assistant turn with the stop button displayed
+      // forever. It is not making progress, so cancel it and let the caller reset
+      // the conversation for its one controlled retry.
+      if (state.isGenerating && state.length <= opts.minLength && elapsed > opts.initialResponseTimeoutMs) {
+        await page.evaluate(() => {
+          document.querySelector('[data-testid="stop-button"], button[aria-label*="Stop" i]')?.click();
+        }).catch(() => {});
+        throw new Error(`GPT generation started but produced no text after ${Math.round(opts.initialResponseTimeoutMs / 1000)}s.`);
+      }
+
       // If idle for too long and nothing seems to be generating, try a gentle nudge (press Enter once)
       if (!state.isGenerating && state.length <= opts.minLength && (Date.now() - lastChangeTs) > opts.resendOnIdleMs && !resentOnce) {
         try {
-          logFn('⚠️ No output detected after sending. Taking screenshot...');
+          logFn('⚠️ No output detected after sending. Saving debug info...');
           try {
+            logFn(`📍 Current URL: ${page.url()}`);
             await page.screenshot({ path: `gpt-timeout-${Date.now()}.png` });
-            logFn('📸 Screenshot saved for debugging');
+            const chatHtml = await page.evaluate(() => {
+              const main = document.querySelector('main') || document.querySelector('[class*="chat"]') || document.querySelector('[class*="conversation"]') || document.body;
+              return main.innerHTML.substring(0, 20000);
+            });
+            fs.writeFileSync(`gpt-debug-dom-${Date.now()}.html`, chatHtml);
+            logFn('📸 Screenshot + DOM saved for debugging');
           } catch (e) {}
           logFn('⚠️ Nudging with Enter once...');
           await page.keyboard.press('Enter');
@@ -1143,11 +1883,46 @@ class UpworkCampaignManager extends EventEmitter {
    * Extract response from ChatGPT DOM
    * FIXED: Preserves code fences for metadata extraction
    */
-  async extractGPTResponse(page) {
-    return await page.evaluate(() => {
-      const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
-      if (messages.length > 0) {
-        const lastMessage = messages[messages.length - 1];
+  async extractGPTResponse(page, assistantBaseline = 0) {
+    return await page.evaluate((baseline) => {
+      function findAllAssistantMessages() {
+        let msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
+        if (msgs.length > 0) return Array.from(msgs);
+        msgs = document.querySelectorAll('article[data-testid*="assistant"]');
+        if (msgs.length > 0) return Array.from(msgs);
+        const articles = document.querySelectorAll('article[data-testid^="conversation-turn"]');
+        const assistantArticles = Array.from(articles).filter(m =>
+          m.textContent && !m.querySelector('[data-message-author-role="user"]')
+        );
+        if (assistantArticles.length > 0) return assistantArticles;
+        const userMsgs = document.querySelectorAll('[data-message-author-role="user"]');
+        if (userMsgs.length > 0) {
+          const lastUser = userMsgs[userMsgs.length - 1];
+          const result = [];
+          let el = lastUser.nextElementSibling;
+          while (el) {
+            if (el.textContent && el.textContent.trim().length > 10) {
+              result.push(el);
+            }
+            el = el.nextElementSibling;
+          }
+          if (result.length > 0) return result;
+        }
+        const main = document.querySelector('main') || document.querySelector('[class*="chat"]') || document.querySelector('[class*="conversation"]');
+        if (main) {
+          const children = Array.from(main.children).filter(c =>
+            c.textContent && c.textContent.trim().length > 20 &&
+            !c.querySelector('textarea, [contenteditable]')
+          );
+          if (children.length > 0) return children;
+        }
+        return Array.from(msgs);
+      }
+
+      const messages = findAllAssistantMessages();
+      const newMessages = messages.slice(baseline);
+      if (newMessages.length > 0) {
+        const lastMessage = newMessages[newMessages.length - 1];
         
         // Remove copy buttons
         const clone = lastMessage.cloneNode(true);
@@ -1210,7 +1985,7 @@ class UpworkCampaignManager extends EventEmitter {
         return lastMessage.textContent || '';
       }
       return '';
-    });
+    }, assistantBaseline);
   }
 
   /**
@@ -1230,6 +2005,7 @@ class UpworkCampaignManager extends EventEmitter {
         path: c.path || '/',
         secure: c.secure !== undefined ? !!c.secure : true,
         httpOnly: c.httpOnly !== undefined ? !!c.httpOnly : true,
+        sameSite: c.sameSite,
       })).filter(c => c.name && c.value);
     }
 
@@ -1261,11 +2037,17 @@ class UpworkCampaignManager extends EventEmitter {
         const out = {
           name: c.name,
           value: c.value,
-          domain: c.domain || '.chatgpt.com',
+          domain: c.domain,
           path: c.path || '/',
-          secure: c.secure !== undefined ? c.secure : true,
-          httpOnly: c.httpOnly !== undefined ? c.httpOnly : true,
+          secure: c.secure !== undefined ? !!c.secure : true,
+          httpOnly: c.httpOnly !== undefined ? !!c.httpOnly : true,
         };
+        if (c.sameSite) {
+          const s = String(c.sameSite).toLowerCase();
+          if (s === 'no_restriction') out.sameSite = 'None';
+          else if (s === 'lax') out.sameSite = 'Lax';
+          else if (s === 'strict') out.sameSite = 'Strict';
+        }
         return out;
       } catch (e) {
         return null;
@@ -1274,8 +2056,14 @@ class UpworkCampaignManager extends EventEmitter {
   }
 
   async verifyChatGPTLoggedIn(page) {
-    return await page.evaluate(() => {
+    const raw = await page.evaluate(() => {
       const text = document.body?.innerText || '';
+
+      const isCloudflareChallenge =
+      /checking your browser|verify you are human|cloudflare|ray id|just a moment/i.test(`${document.title || ''}\n${text}`) ||
+        !!document.querySelector('#challenge-form, .cf-browser-verification, [class*="cf-"]');
+      if (isCloudflareChallenge) return 'CLOUDFLARE';
+
       const composerSelector = [
         'textarea#prompt-textarea',
         '#prompt-textarea',
@@ -1289,11 +2077,33 @@ class UpworkCampaignManager extends EventEmitter {
       const hasComposer = !!document.querySelector(composerSelector);
       const hasLoggedInShell = /new chat|search chats|library|projects|apps/i.test(text)
         && /ask anything|what are you working on|what.?s on your mind/i.test(text);
-      const hasLoginPrompt = /log in or sign up|continue with google|continue with apple|email address/i.test(text);
+      const hasAccountProfile = !!document.querySelector(
+        '[data-testid="accounts-profile-button"], [data-testid="profile-button"], button[aria-label*="Account" i]'
+      );
+      const hasLoginPrompt = /log in or sign up|sign up or log in to save chats|continue with google|continue with apple|email address/i.test(text);
       const onAuthRoute = /\/auth\/(login|signup)/.test(window.location.pathname);
 
-      return (hasComposer || hasLoggedInShell) && !hasLoginPrompt && !onAuthRoute;
+      return (hasComposer || hasLoggedInShell) && hasAccountProfile && !hasLoginPrompt && !onAuthRoute;
     });
+    if (raw === 'CLOUDFLARE') {
+      this.log('', 'warning', '⚠️ Cloudflare challenge detected on chatgpt.com — bot fingerprint detection active');
+      return false;
+    }
+    return raw;
+  }
+
+  async hasOpenAIChallenge(page) {
+    return page.evaluate(() => {
+      const text = `${document.title || ''}\n${document.body?.innerText || ''}`;
+      return /checking your browser|verify you are human|cloudflare|ray id|just a moment/i.test(text);
+    }).catch(() => false);
+  }
+
+  async checkChatGPTLoggedInWithRetry(page) {
+    let result = await this.verifyChatGPTLoggedIn(page);
+    if (result !== false) return result;
+    await new Promise(r => setTimeout(r, 10000));
+    return this.verifyChatGPTLoggedIn(page);
   }
 
   async findLoggedInChatGPTPage(browser) {
@@ -1302,7 +2112,7 @@ class UpworkCampaignManager extends EventEmitter {
       try {
         const url = candidate.url();
         if (!/chatgpt\.com/.test(url)) continue;
-        if (await this.verifyChatGPTLoggedIn(candidate)) {
+        if (await this.checkChatGPTLoggedInWithRetry(candidate) === true) {
           await candidate.bringToFront();
           return candidate;
         }
@@ -1312,8 +2122,10 @@ class UpworkCampaignManager extends EventEmitter {
   }
 
   getChatGPTProfileDir(gptAccountId = 'default') {
-    const safeId = String(gptAccountId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
-    const profileDir = path.join(process.cwd(), '.chatgpt-profiles', safeId);
+    const safeAccountId = String(gptAccountId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+    // A GPT account has one browser identity. Campaign-specific profiles caused
+    // repeated logins and allowed one campaign to use a guest session.
+    const profileDir = path.join(process.cwd(), '.chatgpt-profiles', safeAccountId);
     fs.mkdirSync(profileDir, { recursive: true });
     return profileDir;
   }
@@ -1322,22 +2134,19 @@ class UpworkCampaignManager extends EventEmitter {
     return getFallbackChatGPTProfileDir(gptAccountId);
   }
 
-  async launchChatGPTBrowser(puppeteer, gptAccountId) {
-    const profileDir = this.getChatGPTProfileDir(gptAccountId);
+  async launchChatGPTBrowser(gptAccountId, campaignId = '') {
+    const profileDir = this.getChatGPTProfileDir(gptAccountId, campaignId);
     const fallbackProfileDir = this.getFallbackChatGPTProfileDir(gptAccountId);
     const launchOptions = {
-      protocolTimeout: 120000,
-      headless: false,
+      protocolTimeout: 300000,
+      timeout: 60000,
+      headless: !showGPTBrowser,
+      executablePath: installedChromePath,
       args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process'
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--window-position=0,0',
       ],
-      ignoreDefaultArgs: ['--enable-automation'],
       defaultViewport: { width: 1920, height: 1080 }
     };
     const launched = await launchPuppeteerWithProfileFallback(
@@ -1350,14 +2159,35 @@ class UpworkCampaignManager extends EventEmitter {
     const browser = launched.browser;
 
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     return { browser, page, profileDir: launched.profileDir };
   }
 
   async ensureChatGPTSession(page, campaignId, gptAccountId, timeoutMs = 600000) {
-    if (await this.verifyChatGPTLoggedIn(page)) {
+    if (await this.checkChatGPTLoggedInWithRetry(page) === true) {
+      await this.persistChatGPTCookies(page, gptAccountId, campaignId);
       return page;
     }
+
+    if (await this.hasOpenAIChallenge(page)) {
+      throw new Error('ChatGPT is waiting on a Cloudflare/OpenAI challenge. Complete the challenge in a normal browser session before retrying.');
+    }
+
+    const creds = await this._getAccountForAutoLogin(gptAccountId);
+    if (creds && creds.email && creds.password) {
+      this.log(campaignId, 'info', '🔑 Attempting automated ChatGPT login...');
+      const ok = await autoLoginChatGPT(page, creds.email, creds.password, (msg) => this.log(campaignId, 'info', msg));
+      if (ok) {
+        this.clearInvalidGptAccount(gptAccountId);
+        await this.persistChatGPTCookies(page, gptAccountId, campaignId);
+        this.log(campaignId, 'success', '✅ Automated ChatGPT login succeeded.');
+        return page;
+      }
+      this.log(campaignId, 'warning', 'Automated login failed — falling back to manual login window.');
+    }
+
+    // Navigate to chatgpt.com/auth/login so the user sees the login form, not a stale error page
+    await page.goto('https://chatgpt.com/auth/login', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
     const profileDir = this.getChatGPTProfileDir(gptAccountId);
     this.log(campaignId, 'warning', 'ChatGPT is not logged in. A browser window is open for manual login.');
@@ -1370,12 +2200,14 @@ class UpworkCampaignManager extends EventEmitter {
         const loggedInPage = await this.findLoggedInChatGPTPage(page.browser());
         if (loggedInPage) {
           this.clearInvalidGptAccount(gptAccountId);
+          await this.persistChatGPTCookies(loggedInPage, gptAccountId, campaignId);
           this.log(campaignId, 'success', 'ChatGPT login detected. Continuing automation.');
           return loggedInPage;
         }
 
-        if (await this.verifyChatGPTLoggedIn(page)) {
+        if (await this.checkChatGPTLoggedInWithRetry(page) === true) {
           this.clearInvalidGptAccount(gptAccountId);
+          await this.persistChatGPTCookies(page, gptAccountId, campaignId);
           this.log(campaignId, 'success', 'ChatGPT login detected. Continuing automation.');
           return page;
         }
@@ -1386,8 +2218,93 @@ class UpworkCampaignManager extends EventEmitter {
     throw new Error('Not logged in to ChatGPT after waiting for manual login.');
   }
 
-  async filterJobWithGPT(jobDetails, cookies, campaignId, gptAccountId) {
+  async _getAccountForAutoLogin(gptAccountId) {
+    try {
+      const account = await storage.getGPTAccount(gptAccountId);
+      if (!account || !account.name) return null;
+      return getChatGPTCredentials(account.name);
+    } catch {
+      return null;
+    }
+  }
+
+  async _refreshCookiesViaAutoLogin(campaignId, gptAccountId) {
+    const profileDir = this.getChatGPTProfileDir(gptAccountId);
+    const fallbackProfileDir = this.getFallbackChatGPTProfileDir(gptAccountId);
+
+    const launched = await launchPuppeteerWithProfileFallback(puppeteer, {
+      protocolTimeout: 60000,
+      headless: !showGPTBrowser,
+      executablePath: installedChromePath,
+      defaultViewport: { width: 1280, height: 800 },
+      args: ['--no-first-run', '--no-default-browser-check'],
+    }, profileDir, fallbackProfileDir, (msg) => this.log(campaignId, 'warning', msg));
+
+    const browser = launched.browser;
+    try {
+      const page = await browser.newPage();
+
+      const creds = await this._getAccountForAutoLogin(gptAccountId);
+      if (!creds || !creds.email || !creds.password) throw new Error('No credentials configured for auto-login');
+
+      const ok = await autoLoginChatGPT(page, creds.email, creds.password, (msg) => this.log(campaignId, 'info', msg));
+      if (!ok) throw new Error('Auto-login failed');
+
+      await this.persistChatGPTCookies(page, gptAccountId, campaignId);
+      this.log(campaignId, 'success', 'GPT session refreshed via auto-login.');
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  }
+
+  async persistChatGPTCookies(page, gptAccountId, campaignId) {
+    if (!gptAccountId) return;
+
+    try {
+      if (await this.checkChatGPTLoggedInWithRetry(page) !== true) {
+        this.log(campaignId, 'warning', 'ChatGPT page is not authenticated; refreshed cookies were not saved.');
+        return;
+      }
+
+      const freshCookies = await page.cookies('https://chatgpt.com');
+      if (freshCookies.length === 0) return;
+
+      await storage.updateGPTAccount(gptAccountId, { cookies: freshCookies, status: 'active' });
+      this.log(campaignId, 'info', `Saved refreshed GPT session (${freshCookies.length} cookies).`);
+    } catch (error) {
+      // The browser profile still retains the login if database persistence fails.
+      this.log(campaignId, 'warning', `Could not save refreshed GPT session: ${error.message}`);
+    }
+  }
+
+  /**
+   * Exclusive browser mutex — ensures only 1 Puppeteer session runs at a time
+   * Prevents profile lock contention when multiple jobs arrive concurrently via Bridge API
+   */
+  async _withExclusiveBrowser(key, fn) {
+    if (!this._browserLocks[key]) {
+      this._browserLocks[key] = null;
+    }
+    while (this._browserLocks[key]) {
+      try { await this._browserLocks[key]; } catch { /* ignore */ }
+    }
+    const promise = (async () => {
+      try {
+        return await fn();
+      } finally {
+        this._browserLocks[key] = null;
+      }
+    })();
+    this._browserLocks[key] = promise;
+    return promise;
+  }
+
+  async filterJobWithGPT(jobDetails, cookies, campaignId, gptAccountId, existingPage = null, existingBrowser = null) {
     this.log(campaignId, 'info', `🤖 Filtering job: ${jobDetails.title}`);
+
+    if (existingPage && existingBrowser) {
+      return this._filterJobWithGPTInternal(jobDetails, cookies, campaignId, gptAccountId, existingPage, existingBrowser);
+    }
 
     return this.retryWithBackoff(
       async () => this._filterJobWithGPTInternal(jobDetails, cookies, campaignId, gptAccountId),
@@ -1402,9 +2319,9 @@ class UpworkCampaignManager extends EventEmitter {
     );
   }
 
-  async _filterJobWithGPTInternal(jobDetails, cookies, campaignId, gptAccountId) {
-    const puppeteer = (await import('puppeteer')).default;
+  async _filterJobWithGPTInternal(jobDetails, cookies, campaignId, gptAccountId, existingPage = null, existingBrowser = null) {
     let browser;
+    let ownsBrowser = false;
 
     try {
       // Build the full prompt with placeholder replacement
@@ -1421,39 +2338,80 @@ class UpworkCampaignManager extends EventEmitter {
 
       this.log(campaignId, 'info', 'Sending job to GPT for viability check...');
 
-      const launched = await this.launchChatGPTBrowser(puppeteer, gptAccountId);
-      browser = launched.browser;
-      let page = launched.page;
+      let page;
+      if (existingPage && existingBrowser) {
+        browser = existingBrowser;
+        page = existingPage;
+        ownsBrowser = false;
+        this.log(campaignId, 'info', 'Reusing existing ChatGPT browser session for filter.');
+      } else {
+        const launched = await this.launchChatGPTBrowser(gptAccountId, campaignId);
+        browser = launched.browser;
+        page = launched.page;
+        ownsBrowser = true;
+
+        // Load cookies with sanitization (handles both ARRAY and OBJECT formats)
+        // Load the persistent profile before applying database cookies. A profile
+        // session is generally newer than an exported cookie array.
+        await this.navigateToChatGPT(page, campaignId);
+        const profileHasSession = await this.checkChatGPTLoggedInWithRetry(page);
+        const sanitizedCookies = profileHasSession ? [] : this.sanitizeCookies(cookies);
+        if (profileHasSession) {
+          this.log(campaignId, 'info', 'Using the saved ChatGPT browser session.');
+        }
+        if (sanitizedCookies.length > 0) {
+          console.log(`🍪 Setting ${sanitizedCookies.length} cookies for account`);
+          await page.setCookie(...sanitizedCookies);
+          await this.navigateToChatGPT(page, campaignId);
+        } else if (!profileHasSession) {
+          this.log(campaignId, 'warning', '⚠️ No valid cookies to set — GPT session may fail');
+        }
+
+        page = await this.ensureChatGPTSession(page, campaignId, gptAccountId);
+      }
 
       // Register active browser for force-stop support
       this.activeBrowsers.set(campaignId, browser);
 
-      // Load cookies with sanitization (handles both ARRAY and OBJECT formats)
-      const sanitizedCookies = this.sanitizeCookies(cookies);
-      if (sanitizedCookies.length > 0) {
-        console.log(`🍪 Setting ${sanitizedCookies.length} cookies for account`);
-        await page.setCookie(...sanitizedCookies);
-      } else {
-        this.log(campaignId, 'warning', '⚠️ No valid cookies to set — GPT session may fail');
-      }
-
-      await this.navigateToChatGPT(page, campaignId);
-
-      page = await this.ensureChatGPTSession(page, campaignId, gptAccountId);
-
       await this.waitForChatGPTComposer(page);
+      let assistantBaseline = await page.evaluate(() => (
+        document.querySelectorAll('[data-message-author-role="assistant"]').length
+      ));
 
-      // Send prompt using helper method (same as apifyToGPTProcessor)
-      await this.sendPromptToGPT(page, fullPrompt, (msg) => this.log(campaignId, 'info', msg));
+      // Send prompt and wait for response — with retry on context destroyed
+      let responseText = '';
+      const MAX_PROMPT_RETRIES = 2;
+      for (let attempt = 1; attempt <= MAX_PROMPT_RETRIES; attempt++) {
+        try {
+          await this.sendPromptToGPT(page, fullPrompt, (msg) => this.log(campaignId, 'info', msg));
 
-      // Wait for response to complete
-      await this.waitForGPTResponse(page, (msg) => this.log(campaignId, 'info', msg), 5, 2000, 50);
+          await this.waitForGPTResponse(page, (msg) => this.log(campaignId, 'info', msg), {
+            maxStableChecks: 5,
+            checkInterval: 2000,
+            minLength: 50,
+            overallTimeoutMs: 90000,
+            assistantBaseline,
+          });
 
-      // Extract response
-      const responseText = await this.extractGPTResponse(page);
+          responseText = await this.extractGPTResponse(page, assistantBaseline);
 
-      if (!responseText) {
-        throw new Error('No response received from GPT');
+          if (responseText) break;
+
+          throw new Error('No response received from GPT');
+        } catch (promptError) {
+          const isNavError = /execution context was destroyed|navigation|redirected to login/i.test(promptError?.message || '');
+          if (isNavError && attempt < MAX_PROMPT_RETRIES) {
+            this.log(campaignId, 'warning', `🔄 Prompt retry ${attempt}/${MAX_PROMPT_RETRIES-1} after navigation error: ${promptError.message}`);
+            await this.navigateToChatGPT(page, campaignId);
+            page = await this.ensureChatGPTSession(page, campaignId, gptAccountId);
+            await this.waitForChatGPTComposer(page);
+            assistantBaseline = await page.evaluate(() => (
+              document.querySelectorAll('[data-message-author-role="assistant"]').length
+            ));
+            continue;
+          }
+          throw promptError;
+        }
       }
 
       this.log(campaignId, 'info', `GPT Response (first 200 chars): ${responseText.substring(0, 200)}...`);
@@ -1534,7 +2492,7 @@ class UpworkCampaignManager extends EventEmitter {
       this.log(campaignId, 'error', `Failed to filter job: ${error.message}`);
       throw error; // Let retryWithBackoff handle retries
     } finally {
-      if (browser) {
+      if (ownsBrowser && browser) {
         await browser.close();
       }
       this.activeBrowsers.delete(campaignId);
@@ -1553,7 +2511,6 @@ class UpworkCampaignManager extends EventEmitter {
   async generateReadmeForJob(jobDetails, niche, platform, tool, cookies, campaignId, gptAccountId = 'default') {
     this.log(campaignId, 'info', `📝 Generating ${niche} README for: ${jobDetails.title}`);
     
-    const puppeteer = (await import('puppeteer')).default;
     let browser;
     
     try {
@@ -1577,7 +2534,7 @@ class UpworkCampaignManager extends EventEmitter {
       this.log(campaignId, 'info', `   Platform: ${platform}`);
       this.log(campaignId, 'info', `   Tool: ${tool}`);
       
-      const launched = await this.launchChatGPTBrowser(puppeteer, gptAccountId);
+      const launched = await this.launchChatGPTBrowser(gptAccountId, campaignId);
       browser = launched.browser;
       let page = launched.page;
 
@@ -1585,11 +2542,16 @@ class UpworkCampaignManager extends EventEmitter {
       this.activeBrowsers.set(campaignId, browser);
 
       // Load cookies with sanitization (handles both ARRAY and OBJECT formats)
-      const sanitizedCookies = this.sanitizeCookies(cookies);
+      await this.navigateToChatGPT(page, campaignId);
+      const profileHasSession = await this.checkChatGPTLoggedInWithRetry(page);
+      const sanitizedCookies = profileHasSession ? [] : this.sanitizeCookies(cookies);
+      if (profileHasSession) {
+        this.log(campaignId, 'info', 'Using the saved ChatGPT browser session.');
+      }
       if (sanitizedCookies.length > 0) {
         console.log(`🍪 Setting ${sanitizedCookies.length} cookies for account`);
         await page.setCookie(...sanitizedCookies);
-      } else {
+      } else if (!profileHasSession) {
         this.log(campaignId, 'warning', '⚠️ No valid cookies to set — GPT session may fail');
       }
 
@@ -1598,15 +2560,24 @@ class UpworkCampaignManager extends EventEmitter {
       page = await this.ensureChatGPTSession(page, campaignId, gptAccountId);
 
       await this.waitForChatGPTComposer(page);
+      const assistantBaseline = await page.evaluate(() => (
+        document.querySelectorAll('[data-message-author-role="assistant"]').length
+      ));
 
       // Send prompt using helper method (same as apifyToGPTProcessor)
       await this.sendPromptToGPT(page, fullPrompt, (msg) => this.log(campaignId, 'info', msg));
 
       // Wait for response to complete (longer wait for README generation)
-      await this.waitForGPTResponse(page, (msg) => this.log(campaignId, 'info', msg), 8, 3000, 500);
+      await this.waitForGPTResponse(page, (msg) => this.log(campaignId, 'info', msg), {
+        maxStableChecks: 8,
+        checkInterval: 3000,
+        minLength: 500,
+        overallTimeoutMs: 300000,
+        assistantBaseline,
+      });
 
       // Extract response
-      const responseText = await this.extractGPTResponse(page);
+      const responseText = await this.extractGPTResponse(page, assistantBaseline);
 
       if (!responseText) {
         throw new Error('No response received from GPT');
@@ -1704,9 +2675,11 @@ class UpworkCampaignManager extends EventEmitter {
    */
   async getGPTCookies(gptAccountId, campaignId) {
     try {
-      // Check if this account is already known to have invalid cookies
+      // A browser profile may have recovered a session since the previous failure.
+      // Do not lock the account out before we can verify it again.
       if (this.invalidGptAccounts.has(gptAccountId)) {
-        throw new Error('GPT account cookies marked invalid. Please refresh cookies in Settings.');
+        this.log(campaignId, 'warning', 'Previous GPT session failed. Retrying with the saved browser profile and stored cookies.');
+        this.clearInvalidGptAccount(gptAccountId);
       }
 
       let account = await storage.getGPTAccount(gptAccountId);
@@ -1721,24 +2694,39 @@ class UpworkCampaignManager extends EventEmitter {
         }
       }
 
-      if (!account || !account.cookies) {
-        throw new Error('GPT account cookies not found');
+      if (!account) {
+        throw new Error('GPT account not found');
       }
 
       // Parse cookies if they're a string
       let cookies = account.cookies;
-      if (typeof cookies === 'string') {
+      if (cookies && typeof cookies === 'string') {
         try {
           cookies = JSON.parse(cookies);
         } catch (e) {
-          throw new Error('Invalid cookies format');
+          this.log(campaignId, 'warning', `Invalid cookies format for ${account.name}, starting with empty session.`);
+          cookies = {};
         }
       }
 
       // Normalize: handle both ARRAY and OBJECT formats
-      const normalized = this.normalizeCookies(cookies);
+      const normalized = cookies ? this.normalizeCookies(cookies) : [];
       if (normalized.length === 0) {
-        throw new Error('No valid cookies found after normalization');
+        this.log(campaignId, 'info', `No stored cookies for ${account.name} — auto-login will be used.`);
+        return [];
+      }
+
+      // C: Check if the session token cookie is expired
+      const sessionCookie = normalized.find(c => c.name === '__Secure-next-auth.session-token');
+      if (sessionCookie && sessionCookie.expires) {
+        const expiresSec = Number(sessionCookie.expires);
+        const nowSec = Date.now() / 1000;
+        if (expiresSec < nowSec) {
+          this.log(campaignId, 'warning', `Session token for ${account.name} expired ${Math.round((nowSec - expiresSec) / 60)}m ago — will refresh.`);
+          throw new Error('GPT session token has expired');
+        }
+        const remainingMin = Math.round((expiresSec - nowSec) / 60);
+        this.log(campaignId, 'info', `Session token expires in ~${remainingMin} minutes.`);
       }
 
       this.log(campaignId, 'info', `🍪 Loaded ${normalized.length} cookies for account: ${account.name}`);
@@ -1807,10 +2795,34 @@ class UpworkCampaignManager extends EventEmitter {
     try {
       cookies = await this.getGPTCookies(campaign.gptAccountId, id);
     } catch (cookieError) {
-      this.log(id, 'error', `❌ Cannot start campaign: ${cookieError.message}`);
-      await this.setStatus(id, 'Failed');
-      this.running.delete(id);
-      return;
+      this.log(id, 'warning', `❌ Stored cookies expired — proactively refreshing...`);
+      try {
+        await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
+        cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+      } catch (refreshError) {
+        this.log(id, 'error', `❌ Cannot start campaign: cookie refresh failed — ${refreshError.message}`);
+        await this.setStatus(id, 'Failed');
+        this.running.delete(id);
+        return;
+      }
+    }
+
+    // A: Proactive cookie health check — verify session freshness before processing jobs
+    try {
+      const nowSec = Date.now() / 1000;
+      const sessionCookie = cookies.find(c => c.name === '__Secure-next-auth.session-token');
+      const isStale = !sessionCookie ||
+        !sessionCookie.value ||
+        sessionCookie.value.length <= 20 ||
+        (sessionCookie.expires && sessionCookie.expires < nowSec + 300); // expiring within 5 min
+      if (isStale) {
+        this.log(id, 'warning', 'GPT session token expiring soon — proactively refreshing...');
+        await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
+        cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+      }
+    } catch (proactiveError) {
+      // Non-fatal: the campaign will try auto-login when needed
+      this.log(id, 'warning', `Proactive cookie refresh failed (will retry on demand): ${proactiveError.message}`);
     }
 
     let processed = 0;
@@ -1971,8 +2983,28 @@ class UpworkCampaignManager extends EventEmitter {
             this.log(id, 'info', `[CONTENT] Starting for: "${job.title}"`);
             
             const jobDescription = upworkJobService.buildJobDescription(job);
+            let sharedBrowser = null;
             
             try {
+              // Launch shared browser for all 3 prompts (avoids 2 redundant navigations)
+              const launched = await this.launchChatGPTBrowser(
+                campaign.gptAccountId,
+                id
+              );
+              sharedBrowser = launched.browser;
+              const sharedPage = launched.page;
+              this.activeBrowsers.set(id, sharedBrowser);
+
+              // Navigate and set up session once
+              await this.navigateToChatGPT(sharedPage, id);
+              const profileHasSession = await this.checkChatGPTLoggedInWithRetry(sharedPage);
+              const sanitizedCookies = profileHasSession ? [] : this.sanitizeCookies(cookies);
+              if (sanitizedCookies.length > 0) {
+                await sharedPage.setCookie(...sanitizedCookies);
+              }
+              await this.navigateToChatGPT(sharedPage, id);
+              await this.ensureChatGPTSession(sharedPage, id, campaign.gptAccountId);
+
               const contentResult = await generateForJob({
                 jobTitle: job.title,
                 jobDescription,
@@ -1982,7 +3014,10 @@ class UpworkCampaignManager extends EventEmitter {
                 logFn: (msg) => this.log(id, 'info', msg),
                 shouldAbort: () => !this.running.get(id),
                 jobSkills: job.skills ? (Array.isArray(job.skills) ? job.skills.join(', ') : job.skills) : 'Not specified',
-                jobBudget: job.budget || 'Not specified'
+                jobBudget: job.budget || 'Not specified',
+                existingBrowser: sharedBrowser,
+                existingPage: sharedPage,
+                sendPrompt: (prompt) => this.sendPromptAndReadGPTResponse(sharedPage, prompt, id),
               });
               
               this.log(id, 'success', `✅ Content generated successfully`);
@@ -2007,6 +3042,11 @@ class UpworkCampaignManager extends EventEmitter {
             } catch (contentError) {
               this.log(id, 'error', `❌ Content generation failed: ${contentError.message}`);
               this.log(id, 'info', 'Continuing to next job...');
+            } finally {
+              if (sharedBrowser) {
+                await sharedBrowser.close().catch(() => {});
+                this.activeBrowsers.delete(id);
+              }
             }
             
             // ====== STORE PROCESSED JOB TO PREVENT FUTURE DUPLICATES ======
@@ -2048,10 +3088,18 @@ class UpworkCampaignManager extends EventEmitter {
           } catch (error) {
             this.log(id, 'error', `Failed to process job: ${error.message}`);
             if (this.isChatGPTAuthError(error)) {
-              this.log(id, 'error', 'Stopping campaign because the selected GPT account is not logged in.');
-              await this.setStatus(id, 'Failed');
-              this.running.delete(id);
-              break;
+              this.log(id, 'warning', 'GPT session expired — attempting auto re-login to refresh cookies...');
+              try {
+                await this._refreshCookiesViaAutoLogin(id, campaign.gptAccountId);
+                cookies = await this.getGPTCookies(campaign.gptAccountId, id);
+                this.log(id, 'info', 'Cookies refreshed — continuing to next job with fresh session.');
+              } catch (refreshError) {
+                this.log(id, 'error', `Auto-login failed: ${refreshError.message}`);
+                this.log(id, 'error', 'Stopping campaign because the selected GPT account is not logged in.');
+                await this.setStatus(id, 'Failed');
+                this.running.delete(id);
+                break;
+              }
             }
             // Continue with next job for non-auth failures
           }
@@ -2597,3 +3645,6 @@ async startScrapeJobsCampaign(id) {
 }
 
 export const upworkCampaignManager = new UpworkCampaignManager();
+
+
+

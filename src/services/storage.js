@@ -84,7 +84,8 @@ CREATE INDEX IF NOT EXISTS idx_gpt_accounts_id ON gpt_accounts(id);
 CREATE TABLE IF NOT EXISTS processed_jobs (
   id TEXT, title TEXT, normalized_title TEXT, description TEXT,
   campaign_id TEXT, niche TEXT, platform TEXT, tool TEXT,
-  repo_url TEXT, created_at TEXT, upwork_job_url TEXT
+  repo_url TEXT, created_at TEXT, upwork_job_url TEXT,
+  viable BOOLEAN DEFAULT true, rejection_reason TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_processed_jobs_id ON processed_jobs(id);
 CREATE INDEX IF NOT EXISTS idx_processed_jobs_norm ON processed_jobs(normalized_title);
@@ -287,6 +288,8 @@ class Storage {
 
       await client.query("ALTER TABLE gpt_accounts ADD COLUMN IF NOT EXISTS is_default BOOLEAN DEFAULT false");
       await client.query("ALTER TABLE gpt_accounts ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'");
+      await client.query("ALTER TABLE processed_jobs ADD COLUMN IF NOT EXISTS viable BOOLEAN DEFAULT true");
+      await client.query("ALTER TABLE processed_jobs ADD COLUMN IF NOT EXISTS rejection_reason TEXT");
     } finally {
       client.release();
     }

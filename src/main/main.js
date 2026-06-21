@@ -1,11 +1,17 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import net from 'net';
+import { fork } from 'child_process';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import { upworkCampaignManager } from '../services/upworkCampaignManager.js';
 import { initializeDefaultGPTAccount } from '../services/initializeGPTAccounts.js';
+import { JobBridgeApi } from '../services/jobBridgeApi.js';
+import { stopDiscordBot } from '../services/discordBotRunner.js';
 import './ipcHandlers.js'; // This registers all IPC handlers
+
+const require = createRequire(import.meta.url);
+const { app, BrowserWindow, ipcMain } = require('electron');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,6 +19,18 @@ const __dirname = path.dirname(__filename);
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL ?? 'http://localhost:5173';
 const DEV_SERVER_POLL_INTERVAL = 200;  // ms between retries
 const DEV_SERVER_TIMEOUT = 10000;      // 10s max wait
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    const existingWindow = BrowserWindow.getAllWindows()[0];
+    if (!existingWindow) return;
+    if (existingWindow.isMinimized()) existingWindow.restore();
+    existingWindow.focus();
+  });
+}
 
 /**
  * Polls the Vite dev server TCP port until it accepts connections.
@@ -113,6 +131,12 @@ async function fixCookiesFile() {
     }
     
     if (!targetPath) {
+      const hasEnvCreds = process.env.CHATGPT_EMAIL_BAKHTAWAR || process.env.CHATGPT_EMAIL_FATIMA;
+      if (hasEnvCreds) {
+        console.log('✅ ChatGPT credentials found in .env — auto-login will be used. Skipping cookies.json.');
+        return true;
+      }
+
       console.log('⚠️ No cookies.json file found. Creating template...');
       
       // Create a template cookies.json file
@@ -145,56 +169,15 @@ async function fixCookiesFile() {
       return false;
     }
     
-    // Check if it's an array (wrong structure)
+    // Check if it's a browser-exported cookies array
     if (Array.isArray(cookies)) {
-      console.log('⚠️ cookies.json has wrong structure (array). Fixing...');
-      
-      // Check if it might be browser cookies export
-      let sessionToken = null;
-      
-      // Try to find session token in array of cookies
-      for (const cookie of cookies) {
-        if (cookie.name === '__Secure-next-auth.session-token' || 
-            cookie.name === 'sessionToken') {
-          sessionToken = cookie.value;
-          break;
-        }
-      }
-      
-      if (sessionToken) {
-        // Found token, create proper structure
-        const fixedCookies = {
-          "sessionToken": sessionToken,
-          "__Secure-next-auth.session-token": sessionToken
-        };
-        
-        // Backup old file
-        const backupPath = targetPath + '.backup';
-        fs.copyFileSync(targetPath, backupPath);
-        console.log(`📦 Backed up old cookies.json to: ${backupPath}`);
-        
-        // Write fixed structure
-        fs.writeFileSync(targetPath, JSON.stringify(fixedCookies, null, 2));
-        console.log('✅ Fixed cookies.json structure');
+      const validCookies = cookies.filter(c => c.name && c.value);
+      if (validCookies.length > 0) {
+        console.log(`✅ cookies.json is a valid cookies array (${validCookies.length} cookies)`);
         return true;
-      } else {
-        console.error('❌ Could not find session token in cookies array');
-        console.log('Creating template file...');
-        
-        const template = {
-          "sessionToken": "PASTE_YOUR_CHATGPT_SESSION_TOKEN_HERE",
-          "__Secure-next-auth.session-token": "PASTE_YOUR_CHATGPT_SESSION_TOKEN_HERE"
-        };
-        
-        // Backup old file
-        const backupPath = targetPath + '.backup';
-        fs.copyFileSync(targetPath, backupPath);
-        console.log(`📦 Backed up old cookies.json to: ${backupPath}`);
-        
-        fs.writeFileSync(targetPath, JSON.stringify(template, null, 2));
-        console.log('⚠️ Please edit cookies.json and add your ChatGPT session token!');
-        return false;
       }
+      console.error('❌ cookies.json array entries missing name/value fields');
+      return false;
     }
     
     // Check if it has the required fields
@@ -217,6 +200,24 @@ async function fixCookiesFile() {
     console.error('❌ Error fixing cookies file:', error);
     return false;
   }
+}
+
+const SYNC_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+
+function startSyncScheduler() {
+  const syncScript = path.resolve(__dirname, '../../scripts/sync-to-listing-db.mjs');
+
+  function runSync() {
+    console.log(`[SyncScheduler] Starting sync at ${new Date().toISOString()}`);
+    const child = fork(syncScript, [], { stdio: 'inherit' });
+    child.on('exit', (code) => {
+      console.log(`[SyncScheduler] Sync exited with code ${code}`);
+    });
+  }
+
+  runSync();
+  setInterval(runSync, SYNC_INTERVAL_MS);
+  console.log(`[SyncScheduler] Scheduled every ${SYNC_INTERVAL_MS / 1000}s`);
 }
 
 function resolvePreloadPath() {
@@ -321,12 +322,20 @@ async function createWindow() {
   });
 }
 
+const bridge = new JobBridgeApi(upworkCampaignManager);
+
 app.whenReady().then(async () => {
   // Initialize default GPT account
   await initializeDefaultGPTAccount();
 
   // Reset any stale 'Running' campaigns from previous sessions
   await upworkCampaignManager.resetRunningCampaigns();
+
+  // Start 15-minute sync scheduler (Module 1 → Module 2)
+  startSyncScheduler();
+
+  // Start bridge API for Discord bot
+  bridge.start();
 
   // Run tests if requested
   // await runTests();
@@ -337,8 +346,15 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    bridge.stop();
+    stopDiscordBot();
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  bridge.stop();
+  stopDiscordBot();
 });
 
 app.on('activate', () => {
