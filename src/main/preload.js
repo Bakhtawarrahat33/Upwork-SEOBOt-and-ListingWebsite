@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld('api', {
   getCampaignLogs: (campaignId) => ipcRenderer.invoke('logs:get', { id: campaignId }),
   clearLogs: (campaignId) => ipcRenderer.invoke('logs:clear', { id: campaignId }),
 
+  // Job Cache
+  getJobCacheStatus: () => ipcRenderer.invoke('jobCache:status'),
+
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
 
   // Event listeners

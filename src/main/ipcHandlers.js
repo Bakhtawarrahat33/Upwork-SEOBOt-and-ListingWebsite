@@ -146,6 +146,11 @@ ipcMain.handle('gptAccounts:delete', async (_event, id) => {
   }
 });
 
+// ==================== Job Cache Status ====================
+ipcMain.handle('jobCache:status', async () => {
+  return upworkCampaignManager.getJobCacheStatus();
+});
+
 // ==================== Upwork Campaign Operations ====================
 ipcMain.handle('upworkCampaigns:list', async () => {
   try {

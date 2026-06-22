@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Trash2, Edit2, X } from 'lucide-react';
 
@@ -183,7 +184,9 @@ function AddGPTAccountModal({ open, onClose, onSuccess }) {
 
   if (!open) return null;
 
-  return (
+  // Render above the app shell. The shell owns a scrolling, overflow-hidden
+  // container which can otherwise intercept pointer/focus events in Electron.
+  return createPortal(
     <AnimatePresence>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
         <motion.div
@@ -212,6 +215,8 @@ function AddGPTAccountModal({ open, onClose, onSuccess }) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g., John Doe"
+                autoFocus
+                disabled={loading}
                 className="w-full rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-white placeholder-neutral-400 focus:border-green-500 focus:outline-none transition-colors"
               />
             </div>
@@ -259,6 +264,7 @@ function AddGPTAccountModal({ open, onClose, onSuccess }) {
           </form>
         </motion.div>
       </div>
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body
   );
 }

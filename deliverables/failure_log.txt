@@ -1,0 +1,101 @@
+=== CORRUPTION & RECOVERY TEST ===
+Date: 2026-06-17
+Database: upwork_jobs (PostgreSQL 16)
+Table: jobs_selected
+Action: Dropped column 'title' from jobs_selected while campaign DXyNYeyNQz0xu9sNLr8M_ was actively running
+
+=== STEP 1: BEFORE STATE ===
+Command run:
+  \d jobs_selected
+
+Result: Table had 12 columns including 'title' (text, nullable).
+See screenshot: before_schema.png
+
+=== STEP 2: CORRUPTION INDUCED ===
+Command run while campaign was actively processing jobs:
+  ALTER TABLE jobs_selected DROP COLUMN title;
+
+Result: ALTER TABLE succeeded immediately (PostgreSQL allows dropping columns
+even while other connections are querying the table — no schema lock conflict
+until the next write to that table is attempted).
+
+=== STEP 3: ERROR OUTPUT (CAPTURED FROM LIVE TERMINAL) ===
+Timestamp: 2026-06-17 (during active campaign DXyNYeyNQz0xu9sNLr8M_ run)
+
+Error creating jobs selected: error: column "title" of relation "jobs_selected" does not exist
+    at D:\One-Week-work-with-CEO\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async Storage.createJobsSelected (file:///D:/One-Week-work-with-CEO/dist/services/storage.js:1008:7)
+    at async UpworkCampaignManager.startCampaign (file:///D:/One-Week-work-with-CEO/dist/services/upworkCampaignManager.js:1930:17) {
+  length: 131,
+  severity: 'ERROR',
+  code: '42703',
+  detail: undefined,
+  hint: undefined,
+  position: '45',
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'parse_target.c',
+  line: '1071',
+  routine: 'checkInsertTargets'
+}
+
+Application-level caught warning (logged after the throw propagated up):
+[warning] [DXyNYeyNQz0xu9sNLr8M_] ⚠️ Failed to store in jobs_selected: column "title" of relation "jobs_selected" does not exist
+
+=== STEP 4: ROOT CAUSE — EXACT LINE WHERE ERROR WAS THROWN ===
+
+File: src/services/storage.js
+Line: 1008 (compiled to dist/services/storage.js:1008 — same line number, no transpilation offset)
+
+Thrown code:
+    await this.pool.query(
+      `INSERT INTO jobs_selected (id, campaign_id, title, description, niche, platform, tool, repo_url, upwork_job_url, viability, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [job.id, job.campaign_id, job.title, job.description, job.niche, job.platform,
+       job.tool, job.repo_url, job.upwork_job_url, job.viability, job.created_at, job.updated_at]
+    );
+
+This is the THROW point. The query references the dropped 'title' column directly
+in the INSERT column list, and PostgreSQL's parser rejects it at query-plan time
+(error code 42703 = undefined_column) before any row is written.
+
+NOT the throw point (this is only where the error is CAUGHT and logged):
+File: src/services/upworkCampaignManager.js
+Line: ~1934
+    } catch (jsError) {
+      this.log(id, 'warning', `⚠️ Failed to store in jobs_selected: ${jsError.message}`);
+    }
+
+This catch block re-logs the error message but does not generate it — it is purely
+a handler. The stack trace in Step 3 confirms the call origin is storage.js:1008,
+invoked from upworkCampaignManager.js:1930 (the call site, not the throw site).
+
+=== STEP 5: FIX APPLIED ===
+Command run:
+  ALTER TABLE jobs_selected ADD COLUMN title TEXT;
+
+Result: Column restored. Schema matches original 12-column structure.
+See screenshot: after_schema.png
+
+=== STEP 6: VERIFICATION ===
+After the fix, the campaign continued running without restart (Node.js process
+was never killed — only the SQL schema was corrected). The next viable job
+processed after the fix successfully inserted into jobs_selected with no error,
+confirming recovery without requiring an application restart.
+
+=== SUMMARY ===
+| Step                          | Result                                    |
+|-------------------------------|--------------------------------------------|
+| Column dropped mid-run        | ALTER TABLE succeeded, no immediate crash  |
+| Next campaign write attempt   | Crashed with PostgreSQL error code 42703   |
+| Error thrown at                | storage.js:1008 (pool.query INSERT call)  |
+| Error caught at               | upworkCampaignManager.js:~1934             |
+| Fix applied                   | ALTER TABLE ... ADD COLUMN title TEXT      |
+| Recovery confirmed            | Yes — subsequent inserts succeeded         |

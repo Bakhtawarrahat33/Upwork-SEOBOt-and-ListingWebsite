@@ -175,15 +175,9 @@ export async function getRecentCampaigns(_limit = 5) {
 export async function getSyncStatus() {
   try {
     const { rows } = await pool.query(`
-      SELECT
-        GREATEST(
-          COALESCE((SELECT MAX(synced_at) FROM products), '1970-01-01'::timestamptz),
-          COALESCE((SELECT MAX(synced_at) FROM blogs), '1970-01-01'::timestamptz),
-          COALESCE((SELECT MAX(synced_at) FROM services), '1970-01-01'::timestamptz),
-          COALESCE((SELECT MAX(synced_at) FROM jobs), '1970-01-01'::timestamptz),
-          COALESCE((SELECT MAX(synced_at) FROM upwork_campaigns), '1970-01-01'::timestamptz),
-          COALESCE((SELECT MAX(run_at) FROM sync_audit_log WHERE error IS NULL), '1970-01-01'::timestamptz)
-        ) AS last_synced_at
+      SELECT COALESCE(MAX(run_at), '1970-01-01'::timestamptz) AS last_synced_at
+      FROM sync_audit_log
+      WHERE error IS NULL
     `);
     const value = rows[0]?.last_synced_at;
     return { lastSyncedAt: value && new Date(value).getFullYear() > 1970 ? value : null };
@@ -231,5 +225,23 @@ export async function getSyncAuditLog(limit = 20) {
     'SELECT id, run_at, table_name, rows_synced, duration_ms, error FROM sync_audit_log ORDER BY id DESC LIMIT $1',
     [limit]
   );
+  return rows.map(toCamelRow);
+}
+
+export async function searchAll(query: string) {
+  const rows = await safeRows('searchAll', `
+    SELECT id, title, description, 'products' AS type, NULL AS meta, created_at
+    FROM products WHERE title ILIKE $1 OR description ILIKE $1
+    UNION ALL
+    SELECT id, title, NULL::text AS description, 'blogs' AS type, NULL AS meta, created_at
+    FROM blogs WHERE title ILIKE $1
+    UNION ALL
+    SELECT id, title, description, 'services' AS type, NULL AS meta, created_at
+    FROM services WHERE title ILIKE $1 OR description ILIKE $1
+    UNION ALL
+    SELECT id, title, description, 'jobs' AS type, niche AS meta, created_at
+    FROM jobs WHERE title ILIKE $1 OR description ILIKE $1
+    ORDER BY created_at DESC LIMIT 30
+  `, [`%${query}%`]);
   return rows.map(toCamelRow);
 }

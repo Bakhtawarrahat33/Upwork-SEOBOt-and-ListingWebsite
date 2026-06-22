@@ -17,9 +17,6 @@ export default async function BlogsPage() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Blogs</h1>
-            <span className="inline-flex items-center justify-center min-w-[1.75rem] h-6 rounded-full bg-violet-100 text-xs font-semibold text-violet-700 px-2">
-              {blogs.length}
-            </span>
           </div>
           <p className="text-gray-500 mt-0.5">Read our latest insights on automation and AI.</p>
         </div>

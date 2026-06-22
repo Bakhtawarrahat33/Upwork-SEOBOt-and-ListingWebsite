@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { getJobs, getProducts, getServices, getBlogs, getCampaignStats, getRecentCampaigns, getRecentLogs, getSyncStatus } from "@/lib/db";
 import ItemCard from "@/components/ItemCard";
-import { ArrowRight, Briefcase, Package, Wrench, FileText, Activity, Circle, CalendarClock, Library, Plus, Radio } from "lucide-react";
+import DashboardAutoRefresh from "@/components/DashboardAutoRefresh";
+import { ArrowRight, Briefcase, Activity, Circle, CalendarClock, Plus, Radio, TimerReset } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -41,9 +42,6 @@ export default async function Home() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const runningCount = stats.campaigns.find((c: any) => c.status === 'Running')?.count || 0;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const totalCampaigns = stats.campaigns.reduce((sum: number, c: any) => sum + parseInt(c.count), 0);
-  const completeContentSets = Math.min(products.length, services.length, blogs.length);
 
   const today = new Date();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -53,17 +51,22 @@ export default async function Home() {
     return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
   }).length;
 
+  const lastCronRunText = syncStatus.lastSyncedAt
+    ? new Date(syncStatus.lastSyncedAt).toLocaleString()
+    : "No successful cron run recorded yet";
+
   const statBoxes = [
-    { value: runningCount, label: "Searches running", icon: Activity, help: "Live Upwork searches currently active", accent: "bg-emerald-500", iconBg: "bg-emerald-50", iconText: "text-emerald-600" },
-    { value: stats.jobsToday, label: "New jobs found", icon: Briefcase, help: "Jobs found in the last 24 hours", accent: "bg-blue-500", iconBg: "bg-blue-50", iconText: "text-blue-600" },
+    { value: runningCount, label: "Campaigns running", icon: Activity, help: "Active Upwork campaigns", accent: "bg-emerald-500", iconBg: "bg-emerald-50", iconText: "text-emerald-600" },
     { value: jobsPostedToday, label: "Jobs saved today", icon: CalendarClock, help: "Jobs added to this site today", accent: "bg-indigo-500", iconBg: "bg-indigo-50", iconText: "text-indigo-600" },
+    { value: jobs.length, label: "Total jobs", icon: Briefcase, help: "All jobs saved on this site", accent: "bg-blue-500", iconBg: "bg-blue-50", iconText: "text-blue-600" },
+    { value: "15 min", label: "Cron schedule", icon: TimerReset, help: `Runs at :00, :15, :30, :45. Last cron run: ${lastCronRunText}`, accent: "bg-violet-500", iconBg: "bg-violet-50", iconText: "text-violet-600" },
   ];
 
   const sections = [
-    { title: "Latest Jobs", href: "/jobs", items: jobs.slice(0, 3), count: jobs.length, type: "jobs" as const },
-    { title: "Latest Products", href: "/products", items: products.slice(0, 3), count: products.length, type: "products" as const },
-    { title: "Latest Services", href: "/services", items: services.slice(0, 3), count: services.length, type: "services" as const },
-    { title: "Latest Blogs", href: "/blogs", items: blogs.slice(0, 3), count: blogs.length, type: "blogs" as const },
+    { title: "Latest Jobs", href: "/jobs", items: jobs.slice(0, 3), type: "jobs" as const },
+    { title: "Latest Products", href: "/products", items: products.slice(0, 3), type: "products" as const },
+    { title: "Latest Services", href: "/services", items: services.slice(0, 3), type: "services" as const },
+    { title: "Latest Blogs", href: "/blogs", items: blogs.slice(0, 3), type: "blogs" as const },
   ];
 
   return (
@@ -73,7 +76,7 @@ export default async function Home() {
           <div className="max-w-2xl">
             <div className="mb-4 inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
               <Radio className="h-3.5 w-3.5" />
-              Synced {syncStatus.lastSyncedAt ? new Date(syncStatus.lastSyncedAt).toLocaleString() : 'not yet'}
+              Last cron run {syncStatus.lastSyncedAt ? new Date(syncStatus.lastSyncedAt).toLocaleString() : 'not yet'}
             </div>
             <h1 className="text-3xl font-semibold tracking-tight text-gray-950 sm:text-4xl">
               Job & Content Monitor
@@ -99,22 +102,25 @@ export default async function Home() {
             </Link>
           </div>
         </div>
+        <div className="mt-4">
+          <DashboardAutoRefresh />
+        </div>
       </section>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {statBoxes.map((stat, i) => {
           const Icon = stat.icon;
           return (
             <div
               key={stat.label}
-              className={`relative overflow-hidden rounded-lg border border-gray-200 bg-white p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md animate-slideUp stagger-${i + 1}`}
+              className={`relative overflow-hidden rounded-lg border border-gray-200 bg-white p-6 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md animate-slideUp stagger-${i + 1}`}
             >
               <div className={`absolute inset-x-0 top-0 h-1 ${stat.accent}`} />
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-3xl font-semibold tracking-tight text-gray-950">{stat.value}</div>
-                  <div className="mt-1 text-sm font-semibold text-gray-800">{stat.label}</div>
-                </div>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-3xl font-semibold tracking-tight text-gray-950">{stat.value}</div>
+                    <div className="mt-1 text-sm font-semibold text-gray-800">{stat.label}</div>
+                  </div>
                 <div className={`rounded-md p-2 ${stat.iconBg} ${stat.iconText}`}>
                   <Icon className="w-5 h-5" />
                 </div>
@@ -124,18 +130,6 @@ export default async function Home() {
           );
         })}
 
-        <div className="relative overflow-hidden rounded-lg border border-gray-200 bg-white p-5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md animate-slideUp stagger-4">
-          <div className="absolute inset-x-0 top-0 h-1 bg-slate-900" />
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-3xl font-semibold tracking-tight text-gray-950">{completeContentSets}</div>
-              <div className="mt-1 text-sm font-semibold text-gray-800">Complete content sets</div>
-            </div>
-            <div className="rounded-md bg-slate-100 p-2 text-slate-700">
-              <Library className="w-5 h-5" />
-            </div>
-          </div>
-        </div>
       </div>
 
       <div className="grid lg:grid-cols-[1fr_300px] gap-8">
@@ -148,9 +142,6 @@ export default async function Home() {
                   <div className="flex min-w-0 items-center gap-3">
                     <div className={`h-6 w-1 rounded-full ${meta.color}`} />
                     <h2 className="text-lg font-semibold tracking-tight text-slate-900">{section.title}</h2>
-                    <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">
-                      {section.count}
-                    </span>
                   </div>
                   <Link
                     href={section.href}
@@ -191,9 +182,6 @@ export default async function Home() {
           <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-xs font-bold uppercase tracking-wide text-gray-500">Search campaigns</h2>
-              <span className="inline-flex items-center justify-center min-w-[1.25rem] h-4 rounded-full bg-gray-100 text-[10px] font-semibold text-gray-600 px-1.5">
-                {totalCampaigns}
-              </span>
             </div>
             {campaigns.length === 0 ? (
               <p className="text-gray-400 text-xs">No campaigns yet.</p>
@@ -238,31 +226,7 @@ export default async function Home() {
             )}
           </section>
 
-          <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-            <h2 className="mb-3 text-xs font-bold uppercase tracking-wide text-gray-500">What is available</h2>
-            <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-              <span className="font-semibold">{completeContentSets}</span> complete sets are ready to use.
-            </div>
-            <div className="space-y-2">
-              {[
-                { label: "Jobs", count: jobs.length, color: "bg-blue-500", icon: Briefcase },
-                { label: "Product pages", count: products.length, color: "bg-emerald-500", icon: Package },
-                { label: "Service pages", count: services.length, color: "bg-amber-500", icon: Wrench },
-                { label: "Blog pages", count: blogs.length, color: "bg-violet-500", icon: FileText },
-              ].map(({ label, count, color, icon: Icon }) => {
-                return (
-                  <div key={label} className="flex items-center justify-between rounded-md px-3 py-2 hover:bg-gray-50">
-                    <span className="flex items-center gap-2 text-sm text-gray-700">
-                      <span className={`h-2 w-2 rounded-full ${color}`} />
-                      <Icon className="w-3.5 h-3.5 text-gray-400" />
-                      {label}
-                    </span>
-                    <span className="text-sm font-semibold text-gray-950">{count}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+
         </div>
       </div>
     </div>

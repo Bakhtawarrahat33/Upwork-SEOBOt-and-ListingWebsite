@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import net from 'net';
 import { fork } from 'child_process';
+import cron from 'node-cron';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { upworkCampaignManager } from '../services/upworkCampaignManager.js';
@@ -202,7 +203,7 @@ async function fixCookiesFile() {
   }
 }
 
-const SYNC_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const SYNC_CRON_EXPRESSION = '*/1 * * * *'; // Every 15 minutes
 
 function startSyncScheduler() {
   const syncScript = path.resolve(__dirname, '../../scripts/sync-to-listing-db.mjs');
@@ -215,9 +216,12 @@ function startSyncScheduler() {
     });
   }
 
+  // Sync once on launch, then at :00, :15, :30, and :45 each hour.
   runSync();
-  setInterval(runSync, SYNC_INTERVAL_MS);
-  console.log(`[SyncScheduler] Scheduled every ${SYNC_INTERVAL_MS / 1000}s`);
+  cron.schedule(SYNC_CRON_EXPRESSION, runSync, {
+    name: 'listing-database-sync',
+  });
+  console.log(`[SyncScheduler] Scheduled with cron: ${SYNC_CRON_EXPRESSION}`);
 }
 
 function resolvePreloadPath() {

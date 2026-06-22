@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Play, Square, Trash2, Clock, CheckCircle, XCircle, Loader, Hash, Link, Search, X, Download, Rocket } from 'lucide-react';
+import { Play, Square, Trash2, Clock, CheckCircle, XCircle, Loader, Hash, Link, Search, X, Rocket } from 'lucide-react';
 
 const statusConfig = {
   Idle: { icon: Clock, color: 'text-neutral-400', bg: 'bg-neutral-800' },
@@ -12,24 +12,6 @@ const statusConfig = {
 
 export default function CampaignList({ campaigns, onStart, onStop, onDelete }) {
   const [searchQuery, setSearchQuery] = useState('');
-
-  const handleExportLogs = async (campaignId, campaignName) => {
-    if (window.api && window.api.getCampaignLogs) {
-      const logs = await window.api.getCampaignLogs(campaignId);
-      const logText = logs.map(log => {
-        const time = new Date(log.timestamp).toISOString();
-        return `[${time}] [${log.level.toUpperCase()}] ${log.message}`;
-      }).join('\n');
-
-      const blob = new Blob([logText], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${campaignName}-logs.txt`;
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-  };
 
   // Helper function to get item label for a campaign
   const getItemLabel = (campaign) => {
@@ -262,13 +244,6 @@ export default function CampaignList({ campaigns, onStart, onStop, onDelete }) {
                             <Square className="w-4 h-4" /> Stop
                           </button>
                         )}
-                        <button 
-                          onClick={() => handleExportLogs(campaign.id, campaign.name)} 
-                          className="p-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-400 hover:text-white transition-all"
-                          title="Export Logs"
-                        >
-                          <Download className="w-4 h-4" />
-                        </button>
                         {!isRunning && onDelete && (
                           <button 
                             onClick={() => {

@@ -994,6 +994,7 @@ class UpworkCampaignManager extends EventEmitter {
     this._browserLocks = {}; // Per-campaign mutex for concurrent Bridge API operations
     this.bridgeJobQueueTail = Promise.resolve();
     this.bridgeQueueDepth = 0;
+    this.jobCache = new Map(); // In-memory cache: jobId -> { jobData, source, status, timestamp, result }
     this.loadPrompts();
     console.log('UpworkCampaignManager initialized');
   }
@@ -1004,9 +1005,19 @@ class UpworkCampaignManager extends EventEmitter {
     const queuePosition = this.bridgeQueueDepth + 1;
     this.bridgeQueueDepth += 1;
 
+    // Store in in-memory cache immediately
+    this.jobCache.set(jobId, {
+      jobData,
+      source,
+      status: 'pending',
+      timestamp: Date.now(),
+      title,
+      result: null,
+    });
+
     const task = this.bridgeJobQueueTail
       .catch((error) => console.error('Previous bridge job failed:', error))
-      .then(() => this._processSingleJob(jobData, source));
+      .then(() => this._processFromCache(jobId, jobData, source));
 
     // Keep the queue alive after a failed job, so later jobs are never blocked.
     this.bridgeJobQueueTail = task.catch((error) => {
@@ -1014,7 +1025,14 @@ class UpworkCampaignManager extends EventEmitter {
     });
 
     task.then(
-      (result) => console.log(`Bridge queue completed "${title}": ${result.status}`),
+      (result) => {
+        const cached = this.jobCache.get(jobId);
+        if (cached) {
+          cached.status = result.status === 'success' ? 'accepted' : result.status === 'rejected' ? 'rejected' : 'failed';
+          cached.result = result;
+        }
+        console.log(`Bridge queue completed "${title}": ${result.status}`);
+      },
       (error) => console.error(`Bridge queue failed "${title}":`, error)
     ).finally(() => {
       this.bridgeQueueDepth = Math.max(0, this.bridgeQueueDepth - 1);
@@ -1022,6 +1040,35 @@ class UpworkCampaignManager extends EventEmitter {
 
     console.log(`Bridge job queued (${queuePosition}): "${title}"`);
     return { status: 'queued', queue_position: queuePosition, job_id: jobId, title };
+  }
+
+  _processFromCache(jobId, jobData, source) {
+    const cached = this.jobCache.get(jobId);
+    if (cached) cached.status = 'processing';
+    return this._processSingleJob(jobData, source);
+  }
+
+  getJobCacheStatus() {
+    const entries = [];
+    for (const [jobId, entry] of this.jobCache) {
+      entries.push({
+        jobId,
+        title: entry.title,
+        status: entry.status,
+        source: entry.source,
+        timestamp: entry.timestamp,
+      });
+    }
+    entries.sort((a, b) => b.timestamp - a.timestamp);
+    return {
+      total: entries.length,
+      pending: entries.filter(e => e.status === 'pending').length,
+      processing: entries.filter(e => e.status === 'processing').length,
+      accepted: entries.filter(e => e.status === 'accepted').length,
+      rejected: entries.filter(e => e.status === 'rejected').length,
+      failed: entries.filter(e => e.status === 'failed').length,
+      entries,
+    };
   }
 
   async _processSingleJob(jobData, source = 'bridge') {
